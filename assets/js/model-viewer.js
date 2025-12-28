@@ -380,6 +380,10 @@
           container.id = 'modelDocumentation';
           container.style.marginTop = '20px';
           container.style.marginBottom = '20px';
+          container.style.padding = '15px';
+          container.style.background = '#f8f9fa';
+          container.style.borderRadius = '6px';
+          container.style.borderLeft = '4px solid #5c5962';
           metadataTable.parentNode.insertBefore(container, metadataTable.nextSibling);
         }
       }
@@ -388,6 +392,7 @@
         // Simple markdown-to-HTML conversion (basic support)
         var html = convertMarkdownToHtml(markdown);
         container.innerHTML = html;
+        container.style.display = 'block';
       }
     }
 
