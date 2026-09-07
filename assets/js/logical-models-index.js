@@ -135,14 +135,15 @@
       // Initialize DataTable
       dataTable = $('#modelsTable').DataTable({
         pageLength: 25,
+        autoWidth: false, // honor the column widths below instead of sizing to content
         order: [[0, 'asc']], // Sort by title
         columnDefs: [
-          { width: '25%', targets: 0 }, // Title
-          { width: '8%', targets: 1 },  // Status
-          { width: '35%', targets: 2 }, // Description
+          { width: '22%', targets: 0 }, // Title
+          { width: '6%', targets: 1 },  // Status
+          { width: '51%', targets: 2 }, // Description
           { width: '8%', targets: 3 },  // Version
-          { width: '10%', targets: 4 }, // Date
-          { width: '14%', targets: 5 }  // URL
+          { width: '9%', targets: 4 },  // Date
+          { width: '4%', targets: 5 }   // URL
         ]
       });
     }
@@ -177,15 +178,10 @@
       // Version
       var version = sd.version || '';
       
-      // URL (clickable, truncated display)
+      // URL (clickable, shown as a short "link" label)
       var urlHtml = '';
       if (sd.url) {
-        var displayUrl = sd.url;
-        if (displayUrl.length > 40) {
-          displayUrl = displayUrl.substring(0, 37) + '...';
-        }
-        urlHtml = '<a href="' + escapeHtml(sd.url) + '" target="_blank" style="color: #0366d6; text-decoration: none; font-size: 0.85em;" title="' + escapeHtml(sd.url) + '">' + 
-                  escapeHtml(displayUrl) + '</a>';
+        urlHtml = '<a href="' + escapeHtml(sd.url) + '" target="_blank" style="color: #0366d6; text-decoration: none; font-size: 0.85em; white-space: nowrap;" title="' + escapeHtml(sd.url) + '">link</a>';
       }
       
       return [
