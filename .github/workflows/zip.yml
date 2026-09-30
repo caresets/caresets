@@ -1,0 +1,61 @@
+name: Zip the published site
+
+# Every push to main is a publication (GitHub Pages serves this branch). This
+# packs what was published into caresets-site.zip and keeps it in two places:
+#
+#   - a workflow artifact on the run (kept 90 days), for the audit trail
+#   - the rolling release "site", so the latest zip always has one stable URL:
+#     https://github.com/caresets/caresets/releases/latest/download/caresets-site.zip
+#
+# The zip is the site as served: everything in the repository except git and
+# workflow files. Nothing is committed back, so this never re-triggers itself.
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # to create / update the rolling release
+
+concurrency:
+  group: zip-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Zip the site
+        run: |
+          stamp=$(date -u +%Y-%m-%dT%H-%MZ)
+          zip -r -q caresets-site.zip . -x ".git/*" ".github/*" "caresets-site.zip"
+          echo "STAMP=$stamp" >> "$GITHUB_ENV"
+          echo "$(du -h caresets-site.zip | cut -f1) - $(unzip -l caresets-site.zip | tail -1)"
+
+      - name: Keep it on the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: caresets-site
+          path: caresets-site.zip
+          retention-days: 90
+
+      # A rolling release: the tag "site" is moved to this commit and the asset
+      # replaced, so the /releases/latest/download/ URL stays valid and current.
+      - name: Attach it to the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f site
+          git push -f origin site
+          if gh release view site >/dev/null 2>&1; then
+            gh release edit site --title "Published site" \
+              --notes "Site as published on ${STAMP} from ${GITHUB_SHA::7}."
+          else
+            gh release create site caresets-site.zip --title "Published site" \
+              --notes "Site as published on ${STAMP} from ${GITHUB_SHA::7}."
+          fi
+          gh release upload site caresets-site.zip --clobber
