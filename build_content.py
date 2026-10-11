@@ -28,6 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 INPUT_MODELS = ROOT / "input" / "models"
 SERVED_MODELS = ROOT / "_resources" / "models"
+OUT_OF_SCOPE = ROOT / "input" / "models-out-of-scope.json"
 
 sys.path.insert(0, str(ROOT))
 import preprocess_models  # noqa: E402
@@ -42,9 +43,25 @@ def sync_models():
 
     SERVED_MODELS.mkdir(parents=True, exist_ok=True)
 
+    # Models declared out of scope are not served at all. They stay in
+    # input/models/ (that folder mirrors what the publisher publishes); they
+    # are simply not copied, and a served copy from before is removed.
+    out_of_scope = set()
+    if OUT_OF_SCOPE.exists():
+        out_of_scope = {m["name"] for m in json.loads(OUT_OF_SCOPE.read_text(encoding="utf-8-sig")).get("outOfScope", [])}
+
     # Source files relative to input/models (includes draft/ subfolder)
-    src_files = {p.relative_to(INPUT_MODELS)
-                 for p in INPUT_MODELS.rglob("*.json")}
+    src_files, skipped = set(), []
+    for p in INPUT_MODELS.rglob("*.json"):
+        rel = p.relative_to(INPUT_MODELS)
+        try:
+            name = json.loads(p.read_text(encoding="utf-8-sig")).get("name")
+        except ValueError:
+            name = None
+        if name in out_of_scope:
+            skipped.append(name)
+            continue
+        src_files.add(rel)
 
     # Remove served files that no longer exist in the source
     for served in SERVED_MODELS.rglob("*.json"):
@@ -73,6 +90,11 @@ def sync_models():
         dst.write_text(json.dumps(sd, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"  synced {len(src_files)} model file(s); "
           f"{stripped} served without inherited id/extension/modifierExtension")
+    if skipped:
+        print(f"  not served, out of scope ({len(skipped)}): {', '.join(sorted(skipped))}")
+    missing = sorted(out_of_scope - set(skipped))
+    if missing:
+        print(f"  WARNING: {len(missing)} out-of-scope name(s) match no model in input/models: {', '.join(missing)}")
     return 0
 
 
