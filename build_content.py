@@ -20,6 +20,7 @@ Usage:
 """
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -29,9 +30,24 @@ ROOT = Path(__file__).parent
 INPUT_MODELS = ROOT / "input" / "models"
 SERVED_MODELS = ROOT / "_resources" / "models"
 OUT_OF_SCOPE = ROOT / "input" / "models-out-of-scope.json"
+NAMING = ROOT / "input" / "models-naming.json"
 
 sys.path.insert(0, str(ROOT))
 import preprocess_models  # noqa: E402
+
+
+def conventional_title(name, overrides):
+    """`<Concept> Logical Model` from a model name: BeModelCarePlan -> Care Plan
+    Logical Model, PSSRequest -> PSS Request Logical Model, BeModelAnnex81 ->
+    Annex 81 Logical Model. The BeModel prefix and a trailing Model / DataSet
+    are dropped; acronyms stay together. Names the rule cannot handle are in
+    input/models-naming.json."""
+    if name in overrides:
+        return overrides[name]
+    concept = re.sub(r"^BeModel", "", name)
+    concept = re.sub(r"(Model|DataSet)$", "", concept)
+    words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])", " ", concept)
+    return f"{words.strip()} Logical Model"
 
 
 def sync_models():
@@ -49,6 +65,13 @@ def sync_models():
     out_of_scope = set()
     if OUT_OF_SCOPE.exists():
         out_of_scope = {m["name"] for m in json.loads(OUT_OF_SCOPE.read_text(encoding="utf-8-sig")).get("outOfScope", [])}
+
+    # Titles follow one convention on the site (see input/models-naming.json);
+    # the publisher's own titles are left as they are in input/models/.
+    title_overrides = {}
+    if NAMING.exists():
+        title_overrides = json.loads(NAMING.read_text(encoding="utf-8-sig")).get("titles", {})
+    retitled = 0
 
     # Source files relative to input/models (includes draft/ subfolder)
     src_files, skipped = set(), []
@@ -87,9 +110,15 @@ def sync_models():
         if isinstance(sd, dict) and sd.get("resourceType") == "StructureDefinition"                 and sd.get("kind") == "logical":
             sd, report = preprocess_models.strip(sd, all_levels=True)
             stripped += bool(report["removed"])
+            wanted = conventional_title(sd.get("name") or "", title_overrides)
+            if sd.get("name") and sd.get("title") != wanted:
+                sd["title"] = wanted
+                retitled += 1
         dst.write_text(json.dumps(sd, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"  synced {len(src_files)} model file(s); "
           f"{stripped} served without inherited id/extension/modifierExtension")
+    if retitled:
+        print(f"  {retitled} served with the title set to the convention (input/models-naming.json)")
     if skipped:
         print(f"  not served, out of scope ({len(skipped)}): {', '.join(sorted(skipped))}")
     missing = sorted(out_of_scope - set(skipped))
