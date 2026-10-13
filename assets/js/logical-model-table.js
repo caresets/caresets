@@ -20,6 +20,30 @@
   // ValueSet names and pages, built by make_valueset_index.py at content time.
   var valueSetIndex = {};
 
+  // First and latest publication of each model, from the publisher's release
+  // history (make_publication_history.py). Shown as a hover on the date.
+  var publications = {};
+
+  function loadPublications(url) {
+    if (!url) { return Promise.resolve(); }
+    return fetch(url)
+      .then(function(r) { return r.ok ? r.json() : {}; })
+      .then(function(p) { publications = p || {}; })
+      .catch(function(e) { console.warn('Publication history not loaded:', e); });
+  }
+
+  function publicationTitle(name) {
+    var p = publications[name];
+    if (!p) { return ''; }
+    if (!p.first) { return 'Not in a published release yet'; }
+    var s = 'First published ' + p.first.date + ' (release ' + p.first.version + ')';
+    if (p.latest && p.latest.version !== p.first.version) {
+      s += '\nLatest release ' + p.latest.version + ', ' + p.latest.date;
+    }
+    if (p.releases && p.releases.length > 1) { s += '\nIn ' + p.releases.length + ' releases'; }
+    return s;
+  }
+
   function loadValueSetIndex(url) {
     if (!url) { return Promise.resolve(); }
     return fetch(url)
@@ -77,7 +101,7 @@
           })
       : Promise.resolve();
 
-    Promise.all([mapReady, loadValueSetIndex(pageConfig.valueSets)]).then(function() {
+    Promise.all([mapReady, loadValueSetIndex(pageConfig.valueSets), loadPublications(pageConfig.publications)]).then(function() {
     fetch(url)
       .then(function(response) {
         if (!response.ok) {
@@ -191,8 +215,11 @@
                '<td style="padding: 6px; border: 1px solid #ddd;">' + escapeHtml(sd.status) + '</td>';
     }
     if (sd.date) {
+      // the date is the served version's; hovering it shows the first publication
+      var pubTitle = publicationTitle(sd.name);
       tbody += '<td style="padding: 6px; border: 1px solid #ddd; font-weight: bold; width: 150px;">Date</td>' +
-               '<td style="padding: 6px; border: 1px solid #ddd;">' + escapeHtml(sd.date) + '</td>';
+               '<td style="padding: 6px; border: 1px solid #ddd;"' + (pubTitle ? ' title="' + escapeAttr(pubTitle) + '"' : '') + '>' +
+               escapeHtml(sd.date) + (pubTitle ? ' <span style="color:#5c5962;cursor:help">&#9432;</span>' : '') + '</td>';
     }
     tbody += '</tr>';
 

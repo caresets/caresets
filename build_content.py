@@ -153,6 +153,12 @@ def main():
     print("[2b] Resolving ValueSet names")
     run("  run", ["make_valueset_index.py"])
 
+    # First and latest publication of each served model, from the guides'
+    # release histories. Network for new releases only; a failure costs the
+    # hover, not the build.
+    print("[2c] Publication history of the models")
+    run("  run", ["make_publication_history.py"])
+
     print("[3/4] Generating glossary CodeSystems")
     rc = run("  run", ["generate_glossary.py"])
     if rc:

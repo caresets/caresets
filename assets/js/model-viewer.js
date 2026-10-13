@@ -129,7 +129,8 @@
       // Promise.all rather than a chain: it is a separate file and there is no
       // reason to wait for the model list before starting it.
       var vsIndexUrl = ((window.SITE_CONFIG && window.SITE_CONFIG.baseUrl) || '') + '/_resources/valuesets.json';
-      Promise.all([loadConceptMap(), loadValueSetIndex(vsIndexUrl), loadModelsList()]).then(function() {
+      var pubUrl = ((window.SITE_CONFIG && window.SITE_CONFIG.baseUrl) || '') + '/_resources/models-publications.json';
+      Promise.all([loadConceptMap(), loadValueSetIndex(vsIndexUrl), loadPublications(pubUrl), loadModelsList()]).then(function() {
         if (modelName) {
           initializeModel();
         } else {
@@ -154,6 +155,30 @@
 
     // ValueSet names and pages, built by make_valueset_index.py at content time.
     var valueSetIndex = {};
+
+    // First and latest publication of each model, from the publisher's release
+    // history (make_publication_history.py). Shown as a hover on the date.
+    var publications = {};
+
+    function loadPublications(url) {
+      if (!url) { return Promise.resolve(); }
+      return fetch(url)
+        .then(function(r) { return r.ok ? r.json() : {}; })
+        .then(function(p) { publications = p || {}; })
+        .catch(function(e) { console.warn('Publication history not loaded:', e); });
+    }
+
+    function publicationTitle(name) {
+      var p = publications[name];
+      if (!p) { return ''; }
+      if (!p.first) { return 'Not in a published release yet'; }
+      var s = 'First published ' + p.first.date + ' (release ' + p.first.version + ')';
+      if (p.latest && p.latest.version !== p.first.version) {
+        s += '\nLatest release ' + p.latest.version + ', ' + p.latest.date;
+      }
+      if (p.releases && p.releases.length > 1) { s += '\nIn ' + p.releases.length + ' releases'; }
+      return s;
+    }
 
     function loadValueSetIndex(url) {
       if (!url) { return Promise.resolve(); }
@@ -380,8 +405,11 @@
         if (dateValue.indexOf('T') > -1) {
           dateValue = dateValue.split('T')[0];
         }
+        // the date is the served version's; hovering it shows the first publication
+        var pubTitle = publicationTitle(sd.name);
         tbody += '<td style="padding: 6px; border: 1px solid #ddd; font-weight: bold; width: 150px;">Date</td>' +
-                 '<td style="padding: 6px; border: 1px solid #ddd;">' + escapeHtml(dateValue) + '</td>';
+                 '<td style="padding: 6px; border: 1px solid #ddd;"' + (pubTitle ? ' title="' + escapeAttr(pubTitle) + '"' : '') + '>' +
+                 escapeHtml(dateValue) + (pubTitle ? ' <span style="color:#5c5962;cursor:help">&#9432;</span>' : '') + '</td>';
       }
       tbody += '</tr>';
 
