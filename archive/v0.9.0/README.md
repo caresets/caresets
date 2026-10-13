@@ -32,6 +32,7 @@ Model workbooks are **not** here. They live in `../models/xls/`, one per model.
 |---|---|
 | `models/` | The published StructureDefinitions, downloaded by `fetch_ehealth_models.py --apply` or imported by `import_models_zip.py`. This folder is *downstream* of publication, not a place to author a model. |
 | `models-out-of-scope.json` | **Hand-edited.** The published models the site must not show (`name` of the StructureDefinition plus the label it is known by). They stay in `models/` but are not copied to `_resources/models/`. |
+| `models-naming.json` | **Hand-edited.** The title convention for the served models, `<Concept> Logical Model`, derived from each model's name, and the titles for the few names the rule cannot handle. Applied to the served copies only. |
 | `models/draft/` | Models not yet published. Excluded from the site and from the default workbook export; `--include-draft` picks them up. |
 
 To change a model, edit its workbook in `../models/xls/`, run
