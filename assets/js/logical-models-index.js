@@ -32,8 +32,31 @@
 
     var t = translations[currentLang] || translations.en;
 
+    // First and latest publication of each model, from the publisher's release
+    // history (make_publication_history.py); shown as a hover on the date.
+    var publications = {};
+
+    function loadPublications() {
+      return fetch(window.SITE_CONFIG.baseUrl + '/_resources/models-publications.json')
+        .then(function(r) { return r.ok ? r.json() : {}; })
+        .then(function(p) { publications = p || {}; })
+        .catch(function(e) { console.warn('Publication history not loaded:', e); });
+    }
+
+    function publicationTitle(name) {
+      var p = publications[name];
+      if (!p) { return ''; }
+      if (!p.first) { return 'Not in a published release yet'; }
+      var txt = 'First published ' + p.first.date + ' (release ' + p.first.version + ')';
+      if (p.latest && p.latest.version !== p.first.version) {
+        txt += '\nLatest release ' + p.latest.version + ', ' + p.latest.date;
+      }
+      if (p.releases && p.releases.length > 1) { txt += '\nIn ' + p.releases.length + ' releases'; }
+      return txt;
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
-      discoverAndLoadModels();
+      loadPublications().then(discoverAndLoadModels);
     });
   
     function discoverAndLoadModels() {
@@ -184,12 +207,18 @@
         urlHtml = '<a href="' + escapeHtml(sd.url) + '" target="_blank" style="color: #0366d6; text-decoration: none; font-size: 0.85em; white-space: nowrap;" title="' + escapeHtml(sd.url) + '">link</a>';
       }
       
+      // the date is the served version's; hovering it shows the first publication
+      var pubTitle = publicationTitle(sd.name);
+      var dateHtml = pubTitle
+        ? '<span title="' + escapeHtml(pubTitle) + '" style="cursor: help; white-space: nowrap;">' + escapeHtml(dateStr) + ' <span style="color:#5c5962">&#9432;</span></span>'
+        : escapeHtml(dateStr);
+
       return [
         titleHtml,
         statusHtml,
         escapeHtml(description),
         escapeHtml(version),
-        escapeHtml(dateStr),
+        dateHtml,
         urlHtml
       ];
     }
