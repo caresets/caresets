@@ -3,15 +3,20 @@ name: Build, Publish & Package
 # Runs the generation scripts, builds the site, publishes it to this
 # repository's gh-pages branch, and produces downloadable .zip files.
 #
-# Where a build lands on gh-pages:
+# Where a build lands on gh-pages (served at https://<owner>.github.io/<repo>/):
 #
-#   push to main      -> the root, served at  https://<owner>.github.io/<repo>/
-#   push to branch X  -> branches/X/,         https://<owner>.github.io/<repo>/branches/X/
-#   branch X deleted  -> branches/X/ is removed
+#   release tag T pushed -> T/  (that release, kept for good)
+#                           and the root (the current published version)
+#   push to main         -> dev/          (the development version)
+#   push to branch X     -> branches/X/   (a preview of that branch)
+#   branch X deleted     -> branches/X/ is removed
 #
-# The baseurl is a build-time setting, so a branch build is simply built with
-# the longer one. A deploy from main replaces everything at the root EXCEPT
-# what .github/gh-pages-keep lists (branches/ is always kept).
+# A release tag is a version number, with or without a v: 1.0.0, v1.0.0,
+# 1.0.0-rc1. Other tags (site, uml-preview) are not releases and build nothing.
+#
+# The baseurl is a build-time setting, so each copy is simply built with its
+# own. A release replaces the root, but never dev/, branches/, an earlier
+# release's folder, or anything .github/gh-pages-keep lists.
 #
 # GitHub Pages must be set to serve the gh-pages branch, root folder:
 # Settings > Pages > Build and deployment > Deploy from a branch.
@@ -19,13 +24,14 @@ name: Build, Publish & Package
 on:
   push:
     branches-ignore: ["gh-pages"]
+    tags: ["v[0-9]*", "[0-9]*"]
     paths-ignore:
       - "archive/**"   # the auto-backup commit must not re-trigger this workflow
   delete:
   workflow_dispatch:
     inputs:
       gh_pages_baseurl:
-        description: "Baseurl of the main site (empty = derived from the repo name)"
+        description: "Baseurl of the published site (empty = derived from the repo name)"
         required: false
         default: ""
       riziv_baseurl:
@@ -34,7 +40,7 @@ on:
         default: ""
 
 permissions:
-  contents: write        # push to gh-pages, tag and release
+  contents: write        # push to gh-pages, create releases
 
 jobs:
   build:
@@ -46,6 +52,7 @@ jobs:
       cancel-in-progress: true
     outputs:
       dest_dir: ${{ steps.target.outputs.dest_dir }}
+      release: ${{ steps.target.outputs.release }}
     env:
       # Resolution order: manual "Run workflow" input -> repo variable -> derived.
       GH_PAGES_BASEURL: ${{ github.event.inputs.gh_pages_baseurl || vars.GH_PAGES_BASEURL || '' }}
@@ -57,8 +64,12 @@ jobs:
 
       # ---- 0. Where does this build go, and under which baseurl? ----
       # A project page is served under /<repo>, a <name>.github.io repo under /.
-      # Branch names become folder names: anything outside [A-Za-z0-9._-]
-      # (a / in feature/x, say) is replaced by -.
+      # Branch and tag names become folder names: anything outside
+      # [A-Za-z0-9._-] (the / in feature/x, say) is replaced by -.
+      #
+      # site_kind tells the pages which copy they are (release, dev, branch):
+      # it picks the banner and keeps every copy but the root out of search
+      # results. The root build has none.
       - name: Resolve the Pages target
         id: target
         run: |
@@ -69,26 +80,32 @@ jobs:
               *)           GH_PAGES_BASEURL="/$name" ;;
             esac
           fi
-          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
-            dest_dir=""
-            site_baseurl="$GH_PAGES_BASEURL"
-          else
-            slug=$(printf '%s' "$GITHUB_REF_NAME" | sed 's#[^A-Za-z0-9._-]#-#g')
-            dest_dir="branches/$slug"
-            site_baseurl="$GH_PAGES_BASEURL/$dest_dir"
-          fi
+          slug=$(printf '%s' "$GITHUB_REF_NAME" | sed 's#[^A-Za-z0-9._-]#-#g')
+          release=false
+          case "$GITHUB_REF" in
+            refs/tags/*)      kind=release; dest_dir="$slug"; release=true ;;
+            refs/heads/main)  kind=dev;     dest_dir="dev" ;;
+            *)                kind=branch;  dest_dir="branches/$slug" ;;
+          esac
           echo "dest_dir=$dest_dir" >> "$GITHUB_OUTPUT"
-          echo "SITE_BASEURL=$site_baseurl" >> "$GITHUB_ENV"
-          echo "MAIN_BASEURL=$GH_PAGES_BASEURL" >> "$GITHUB_ENV"
-          echo "Building ${GITHUB_REF_NAME} for baseurl '$site_baseurl' -> gh-pages:/${dest_dir}"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "SITE_KIND=$kind" >> "$GITHUB_ENV"
+          echo "SITE_BASEURL=$GH_PAGES_BASEURL/$dest_dir" >> "$GITHUB_ENV"
+          echo "ROOT_BASEURL=$GH_PAGES_BASEURL" >> "$GITHUB_ENV"
+          echo "Building ${GITHUB_REF_NAME} ($kind) for baseurl '$GH_PAGES_BASEURL/$dest_dir' -> gh-pages:/${dest_dir}"
+          if [ "$release" = true ]; then
+            echo "  and for baseurl '$GH_PAGES_BASEURL' -> gh-pages:/ (the published version)"
+          fi
 
-      # ---- 1. Did this change touch the content source (input/ or VERSION)? ----
-      # If yes  -> regenerate _resources/. On main, also snapshot a backup and
-      #            commit both; on a branch, build from the regenerated files
-      #            without committing them.
-      # If no   -> skip Python entirely and just build what's committed.
+      # ---- 1. Does the content need regenerating? ----
+      # On a push that touched input/ or VERSION, regenerate _resources/. On
+      # main, also snapshot a backup and commit both; on a branch, build from
+      # the regenerated files without committing them. A release always
+      # regenerates, because the tagged commit may predate the bot's
+      # regeneration commit. Otherwise build what's committed.
       - name: Detect content changes
         id: filter
+        if: steps.target.outputs.release != 'true'
         uses: dorny/paths-filter@v3
         with:
           filters: |
@@ -96,8 +113,17 @@ jobs:
               - 'input/**'
               - 'VERSION'
 
+      - name: Decide
+        id: regen
+        run: |
+          if [ "${{ steps.target.outputs.release }}" = true ] \
+             || [ "${{ steps.filter.outputs.content }}" = true ] \
+             || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
-        if: steps.filter.outputs.content == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.regen.outputs.needed == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
@@ -106,15 +132,15 @@ jobs:
       # The content scripts read the workbooks with openpyxl, which is not in
       # the standard library and not preinstalled on the runner.
       - name: Install Python dependencies
-        if: steps.filter.outputs.content == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.regen.outputs.needed == 'true'
         run: pip install -r requirements.txt
 
       - name: Regenerate content
-        if: steps.filter.outputs.content == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.regen.outputs.needed == 'true'
         run: python build_content.py      # input/ -> _resources/ (models, glossary, mappings)
 
       - name: Snapshot backup and commit (main only)
-        if: (steps.filter.outputs.content == 'true' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        if: steps.regen.outputs.needed == 'true' && github.ref == 'refs/heads/main'
         run: |
           python backup_content.py     # snapshot input/ -> archive/v<VERSION>/
           git config user.name "github-actions[bot]"
@@ -134,23 +160,24 @@ jobs:
           ruby-version: "3.3"
           bundler-cache: true
 
-      # Every Pages build carries a build stamp (branch, commit, time) that the
-      # footer shows, so a page tells you which build you are looking at.
-      # A branch preview also carries preview_branch, which shows the preview
-      # banner and a noindex meta, so previews stay out of search results.
+      # Every Pages build carries a build stamp (branch or tag, commit, time)
+      # that the footer shows as a tooltip, so a page tells you which build you
+      # are looking at.
       - name: Build site for GitHub Pages
         run: |
-          {
+          stamp() {
             printf 'build_ref: "%s"\n' "$GITHUB_REF_NAME"
             printf 'build_sha: "%s"\n' "${GITHUB_SHA::7}"
             printf 'build_time: "%s"\n' "$(date -u +'%Y-%m-%d %H:%M UTC')"
-            printf 'main_baseurl: "%s"\n' "$MAIN_BASEURL"
-            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-              printf 'preview_branch: "%s"\n' "$GITHUB_REF_NAME"
-            fi
-          } > _config_build.yml
+            printf 'main_baseurl: "%s"\n' "$ROOT_BASEURL"
+          }
+          { stamp; printf 'site_kind: "%s"\n' "$SITE_KIND"; } > _config_build.yml
           cat _config_build.yml
           bundle exec jekyll build --config _config.yml,_config_build.yml --baseurl "$SITE_BASEURL" --destination _site_ghpages
+          if [ "${{ steps.target.outputs.release }}" = true ]; then
+            stamp > _config_root.yml
+            bundle exec jekyll build --config _config.yml,_config_root.yml --baseurl "$ROOT_BASEURL" --destination _site_root
+          fi
 
       # _config_riziv.yml clears `url`, which otherwise stays pointed at the
       # public GitHub Pages copy and makes every RIZIV page declare that copy
@@ -165,14 +192,15 @@ jobs:
       # Include the zip in the published site so it gets a stable, public URL
       # next to the pages it was built with.
       - name: Add zip to the gh-pages payload
-        run: cp riziv-inami-site.zip _site_ghpages/
+        run: |
+          cp riziv-inami-site.zip _site_ghpages/
+          if [ -d _site_root ]; then cp riziv-inami-site.zip _site_root/; fi
 
-      # caresets-site.zip is the Pages site exactly as built (baseurl
-      # included), so a run's output can be inspected or archived without
-      # unpacking gh-pages. Both zips are kept on the run as artifacts, and on
-      # main they are also attached to the rolling release "site", which gives
-      # them one stable URL:
-      #   https://github.com/<owner>/<repo>/releases/latest/download/caresets-site.zip
+      # caresets-site.zip is this build's own copy exactly as built (baseurl
+      # included): for a release, the copy under /<tag>/. Both zips are kept
+      # on the run as artifacts, and a release also attaches them to a GitHub
+      # release named after the tag, so the latest one is always at
+      #   https://github.com/<owner>/<repo>/releases/latest/download/riziv-inami-site.zip
       - name: Create built-site zip
         run: |
           (cd _site_ghpages && zip -r -q ../caresets-site.zip .)
@@ -192,22 +220,20 @@ jobs:
           path: riziv-inami-site.zip
           retention-days: 90
 
-      - name: Attach the zips to the rolling release
-        if: github.ref == 'refs/heads/main'
+      # A release made in the GitHub UI already exists by now (it created the
+      # tag); one pushed as a bare tag gets a release here.
+      - name: Attach the zips to the release
+        if: steps.target.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          stamp=$(date -u +%Y-%m-%dT%H:%MZ)
-          git tag -f site
-          git push -f origin site
-          if gh release view site >/dev/null 2>&1; then
-            gh release edit site --title "Built site" \
-              --notes "Site as built on ${stamp} from ${GITHUB_SHA::7} (content v$(cat VERSION))."
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" caresets-site.zip riziv-inami-site.zip --clobber
           else
-            gh release create site caresets-site.zip riziv-inami-site.zip --title "Built site" \
-              --notes "Site as built on ${stamp} from ${GITHUB_SHA::7} (content v$(cat VERSION))."
+            gh release create "$GITHUB_REF_NAME" caresets-site.zip riziv-inami-site.zip \
+              --title "$GITHUB_REF_NAME" --latest \
+              --notes "Content v$(cat VERSION), built from ${GITHUB_SHA::7}."
           fi
-          gh release upload site caresets-site.zip riziv-inami-site.zip --clobber
 
       # Handed to the deploy job, which runs in the gh-pages queue.
       - name: Upload the Pages payload
@@ -215,6 +241,15 @@ jobs:
         with:
           name: pages-payload
           path: _site_ghpages/
+          include-hidden-files: true
+          retention-days: 1
+
+      - name: Upload the root payload (release only)
+        if: steps.target.outputs.release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-root
+          path: _site_root/
           include-hidden-files: true
           retention-days: 1
 
@@ -230,6 +265,7 @@ jobs:
       cancel-in-progress: false
     env:
       DEST_DIR: ${{ needs.build.outputs.dest_dir }}
+      RELEASE: ${{ needs.build.outputs.release }}
     steps:
       - name: Checkout the keep list
         uses: actions/checkout@v4
@@ -255,28 +291,47 @@ jobs:
           name: pages-payload
           path: payload
 
-      - name: Copy the build into place
-        run: |
-          if [ -z "$DEST_DIR" ]; then
-            # Main: replace the root, keeping .git, branches/ and the keep list.
-            excludes=(--exclude=/.git --exclude=/branches/)
-            while IFS= read -r line || [ -n "$line" ]; do
-              line="${line%%#*}"; line="$(echo "$line" | xargs)"
-              [ -n "$line" ] && excludes+=("--exclude=/${line#/}")
-            done < src/.github/gh-pages-keep
-            echo "Keeping: ${excludes[*]}"
-            rsync -a --delete "${excludes[@]}" payload/ pages/
-          else
-            mkdir -p "pages/$DEST_DIR"
-            rsync -a --delete payload/ "pages/$DEST_DIR/"
-          fi
-          # The payload is already built. Without this, Pages would run Jekyll
-          # over it again and drop every folder starting with _ (_resources/).
-          touch pages/.nojekyll
+      - name: Download the root payload (release only)
+        if: env.RELEASE == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-root
+          path: root
 
+      # This build's own folder: dev/, branches/<name>/ or <tag>/.
+      - name: Copy the build into its folder
+        run: |
+          mkdir -p "pages/$DEST_DIR"
+          rsync -a --delete payload/ "pages/$DEST_DIR/"
+
+      # A release also replaces the root. Kept: .git, dev/, branches/, the keep
+      # list, and every folder holding a site of its own (en/index.html) that
+      # the root build does not produce - that is, every release folder,
+      # including the one just written. Anything else at the root that the
+      # new build no longer produces is deleted.
+      - name: Replace the root (release only)
+        if: env.RELEASE == 'true'
+        run: |
+          excludes=(--exclude=/.git --exclude=/dev/ --exclude=/branches/)
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%%#*}"; line="$(echo "$line" | xargs)"
+            [ -n "$line" ] && excludes+=("--exclude=/${line#/}")
+          done < src/.github/gh-pages-keep
+          for d in pages/*/; do
+            d="$(basename "$d")"
+            if [ -f "pages/$d/en/index.html" ] && [ ! -e "root/$d" ]; then
+              excludes+=("--exclude=/$d/")
+            fi
+          done
+          echo "Keeping: ${excludes[*]}"
+          rsync -a --delete "${excludes[@]}" root/ pages/
+
+      # The payload is already built. Without this, Pages would run Jekyll
+      # over it again and drop every folder starting with _ (_resources/).
       - name: Commit and push
         working-directory: pages
         run: |
+          touch .nojekyll
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -284,10 +339,14 @@ jobs:
             echo "gh-pages already matches this build."
             exit 0
           fi
-          git commit -q -m "Publish ${GITHUB_REF_NAME} (${GITHUB_SHA::7}) to /${DEST_DIR}"
+          where="/${DEST_DIR}"
+          [ "$RELEASE" = true ] && where="$where and /"
+          git commit -q -m "Publish ${GITHUB_REF_NAME} (${GITHUB_SHA::7}) to $where"
           git push origin gh-pages
 
   # ---- 5. Remove a deleted branch's preview ----
+  # Deleting a tag removes nothing: a published release stays until it is
+  # taken down by hand.
   cleanup:
     if: github.event_name == 'delete' && github.event.ref_type == 'branch'
     runs-on: ubuntu-latest

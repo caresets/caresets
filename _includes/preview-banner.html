@@ -1,20 +1,50 @@
 {%- comment -%}
-Shown on every page of a branch preview: a build that publish.yml put under
-branches/<branch>/ on gh-pages. Says which branch it is and links to the main
-site, so a preview is never mistaken for the published version. Set by the
-workflow through site.preview_branch; never set in _config.yml.
+Shown on every page of a copy that is not the published site at the root:
+publish.yml sets site.site_kind for each of them (never set in _config.yml).
+
+  release  <tag>/         that release, kept as it was published
+  dev      dev/           the development version, built from main
+  branch   branches/<x>/  a preview of one branch
+
+Each says which copy it is and links to the published version at the root, so
+none is mistaken for it. site.build_ref is the branch or tag name.
 {%- endcomment -%}
 {%- assign lang = page.lang | default: 'en' -%}
 {%- capture main_site %}{{ site.main_baseurl }}/{{ lang }}/{% endcapture -%}
-<div class="preview-banner" role="note">
+{%- assign ref = site.build_ref | escape -%}
+<div class="preview-banner preview-banner--{{ site.site_kind }}" role="note">
+{%- if site.site_kind == 'release' %}
 {%- if lang == 'fr' %}
-  <strong>Aperçu de la branche « {{ site.preview_branch }} ».</strong>
+  <strong>Version {{ ref }}.</strong>
+  Copie conservée telle que publiée. La version actuelle se trouve <a href="{{ main_site }}">ici</a>.
+{%- elsif lang == 'nl' %}
+  <strong>Versie {{ ref }}.</strong>
+  Kopie bewaard zoals gepubliceerd. De huidige versie staat <a href="{{ main_site }}">hier</a>.
+{%- else %}
+  <strong>Release {{ ref }}.</strong>
+  Kept as it was published. The current version is <a href="{{ main_site }}">here</a>.
+{%- endif %}
+{%- elsif site.site_kind == 'dev' %}
+{%- if lang == 'fr' %}
+  <strong>Version de développement.</strong>
   Ce n'est pas la version publiée, qui se trouve <a href="{{ main_site }}">ici</a>.
 {%- elsif lang == 'nl' %}
-  <strong>Voorbeeld van branch "{{ site.preview_branch }}".</strong>
+  <strong>Ontwikkelversie.</strong>
   Dit is niet de gepubliceerde versie; die staat <a href="{{ main_site }}">hier</a>.
 {%- else %}
-  <strong>Preview of branch "{{ site.preview_branch }}".</strong>
+  <strong>Development version.</strong>
   This is not the published version, which is <a href="{{ main_site }}">here</a>.
+{%- endif %}
+{%- else %}
+{%- if lang == 'fr' %}
+  <strong>Aperçu de la branche « {{ ref }} ».</strong>
+  Ce n'est pas la version publiée, qui se trouve <a href="{{ main_site }}">ici</a>.
+{%- elsif lang == 'nl' %}
+  <strong>Voorbeeld van branch "{{ ref }}".</strong>
+  Dit is niet de gepubliceerde versie; die staat <a href="{{ main_site }}">hier</a>.
+{%- else %}
+  <strong>Preview of branch "{{ ref }}".</strong>
+  This is not the published version, which is <a href="{{ main_site }}">here</a>.
+{%- endif %}
 {%- endif %}
 </div>
