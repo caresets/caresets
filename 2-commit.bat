@@ -4,8 +4,10 @@ rem
 rem   2-commit.bat                      asks for a commit message
 rem   2-commit.bat glossary: new terms  uses the rest of the line as the message
 rem
-rem Commits the source repository (caresets-src) only. Publishing the built
-rem site is 3-publish.bat.
+rem The push to main is built by GitHub and published as the development
+rem version at https://caresets.github.io/caresets/dev/ . The published
+rem version changes only with a release tag - see "When you cut a release"
+rem in README.md.
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
@@ -42,5 +44,5 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Pushed. Run 3-publish.bat to build and publish the site.
+echo Pushed. In a few minutes it is at https://caresets.github.io/caresets/dev/
 endlocal

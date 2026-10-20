@@ -83,28 +83,39 @@ See [`input/README.md`](input/README.md) for a field-by-field guide.
 
 ### 2. Commit to `main` — the GitHub Action does the rest
 
-Committing to `main` triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml). What it does depends on **what you changed**:
+Every push triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which builds the site and publishes it to this repository's `gh-pages` branch. GitHub Pages serves that branch at **<https://caresets.github.io/caresets/>**:
 
-- **You edited something in `input/`** (or `VERSION`) → it runs the Python: regenerates `_resources/` (models, glossary, mappings), **snapshots `input/` to `archive/v<VERSION>/`**, commits both back, then builds and deploys.
-- **You edited anything else** (a page, layout, CSS…) → it skips Python and snapshotting entirely, and just builds and deploys what's committed.
+| You push | It appears at | What it is |
+|---|---|---|
+| a release tag, e.g. `v0.9.0` | **`/caresets/`** and `/caresets/v0.9.0/` | the published version, plus a copy of that release kept for good |
+| to `main` | `/caresets/dev/` | the development version |
+| to another branch `x` | `/caresets/branches/x/` | a preview of that branch (removed when the branch is deleted) |
 
-Either way it ends by building the site twice and packaging both builds:
+Every copy except the published one shows a banner saying what it is, and stays out of search results. The footer says which copy you are on (e.g. "Release v0.9.0" or "Development version"); hover over it for the commit and build time.
 
-- **`caresets-site.zip`** — the public site as built, ready to unzip and serve.
+What the build does first depends on **what you changed**:
+
+- **You edited something in `input/`** (or `VERSION`) → it runs the Python: regenerates `_resources/` (models, glossary, mappings). On `main` it also **snapshots `input/` to `archive/v<VERSION>/`** and commits both back. A release always regenerates.
+- **You edited anything else** (a page, layout, CSS…) → it skips Python and just builds what's committed.
+
+Each build also makes two zips, kept on the run as artifacts (90 days):
+
+- **`caresets-site.zip`** — the site exactly as built for its copy.
 - **`riziv-inami-site.zip`** — the RIZIV-INAMI deployable, built without the public `url`.
 
-Both are kept on the run as artifacts (90 days) and, for pushes to `main`, attached to the rolling release **`site`**, so the latest build always has the same download links:
+A release also attaches both to a GitHub release named after its tag, so the current release always has the same download links:
 
-- **<https://github.com/caresets/caresets-src/releases/latest/download/caresets-site.zip>**
-- **<https://github.com/caresets/caresets-src/releases/latest/download/riziv-inami-site.zip>**
+- **<https://github.com/caresets/caresets/releases/latest/download/caresets-site.zip>**
+- **<https://github.com/caresets/caresets/releases/latest/download/riziv-inami-site.zip>**
 
-The public site itself is served by GitHub Pages from the separate repository **[caresets/caresets](https://github.com/caresets/caresets)** at **<https://caresets.github.io/caresets/>**. Publishing there is a push to that repository: run `3-publish.bat` (builds into a local clone of it and pushes), or let the Action's last step do it once the secret `PAGES_DEPLOY_TOKEN` is configured — the built-in token cannot push to another repository. That repository's own workflow zips what was published as **<https://github.com/caresets/caresets/releases/latest/download/caresets-site.zip>**.
+You do **not** run any Python locally for the site or the zips — that's the Action's job. (Pull requests are also validated by [`ci.yml`](.github/workflows/ci.yml), which builds but does not deploy.)
 
-You do **not** run any Python locally for the zips — that's the Action's job. (Pull requests are validated by [`ci.yml`](.github/workflows/ci.yml), which builds but does not deploy.)
+A publish from a release replaces the root of `gh-pages`, but never touches `dev/`, `branches/`, earlier release folders, or what [`.github/gh-pages-keep`](.github/gh-pages-keep) lists.
 
 ### When you cut a release
 
-Bump `VERSION` (and `content_version` + `footer_content` in `_config.yml`) — also editable in the browser. The version names the backup snapshot (`archive/v<VERSION>/`).
+1. Bump `VERSION` and `content_version` in `_config.yml` (also editable in the browser), commit to `main`, and check the result at `/caresets/dev/`. The version names the backup snapshot (`archive/v<VERSION>/`).
+2. Create the release: on GitHub, **Releases → Draft a new release**, with a new tag `v<VERSION>` on `main`; or locally `git tag -a v0.9.0 -m "Release v0.9.0"` and `git push origin v0.9.0`. Only version-like tags (`1.0.0`, `v1.0.0`, `1.0.0-rc1`) publish.
 
 ### Optional: preview locally before committing
 
@@ -197,7 +208,7 @@ backup_content.py      — snapshot / list / restore input/ versions
 generate_glossary.py   — glossary CSV <-> CodeSystem JSON
 add_glossary_mappings.py — apply mappings to models / build ConceptMap
 en/, fr/, nl/          — page content by language (new models appear automatically)
-_config.yml            — main Jekyll config (production: baseurl /caresets-src)
+_config.yml            — main Jekyll config (baseurl /caresets; the Action sets each copy's own)
 _config_local.yml      — local dev overrides (port 8002, empty baseurl)
 _data/, _includes/, _layouts/, _sass/, assets/ — theme, templates, CSS/JS, images
 _resources/glossary/   — GENERATED CodeSystem + ConceptMap JSON
