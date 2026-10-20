@@ -49,9 +49,9 @@
           if (href.startsWith('http://') || href.startsWith('https://')) return;
           
           // Extract language code from URL (e.g., /caresets/nl/, /nl/, /fr/, /en/)
-          // Matches pattern: /XX/ where XX is 2-3 letter language code
-          // Also handles baseurl like /caresets/en/
-          const langMatch = href.match(/\/([a-z]{2,3})\//);
+          // Matches only the site's languages, so a short folder in the
+          // baseurl (/caresets/branches/fix/en/) is not taken for one.
+          const langMatch = href.match(/\/(en|fr|nl)\//);
 
           if (langMatch) {
             const linkLang = langMatch[1];
