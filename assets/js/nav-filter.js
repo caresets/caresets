@@ -32,14 +32,15 @@
         // Extract language from URL - try multiple patterns
         let linkLang = null;
         
-        // Pattern 1: /baseurl/lang/ or /lang/
-        const pattern1 = href.match(/\/([a-z]{2,3})\//);
+        // Pattern 1: /baseurl/lang/ or /lang/. Only the site's languages, so a
+        // short folder in the baseurl (branches/fix/) is not taken for one.
+        const pattern1 = href.match(/\/(en|fr|nl)\//);
         if (pattern1) {
           linkLang = pattern1[1];
         }
         
         // Pattern 2: Check if URL ends with /lang or /lang/ (for home pages)
-        const pattern2 = href.match(/\/([a-z]{2,3})\/?$/);
+        const pattern2 = href.match(/\/(en|fr|nl)\/?$/);
         if (!linkLang && pattern2) {
           linkLang = pattern2[1];
         }

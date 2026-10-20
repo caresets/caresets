@@ -41,12 +41,12 @@
 
     // Get current language from URL path (e.g., /en/, /fr/, etc.)
     function getCurrentLanguage() {
-      var pathParts = window.location.pathname.split('/').filter(function(p) { return p !== ''; });
-      // Assume first part is language code if it's 2-3 characters
-      if (pathParts.length > 0 && pathParts[0].length >= 2 && pathParts[0].length <= 3) {
-        return pathParts[0];
-      }
-      return 'en';  // Default to English
+      // The language folder can sit under a baseurl of any depth
+      // (/caresets/fr/..., /caresets/branches/x/fr/...), so look for it
+      // anywhere in the path rather than in the first segment.
+      var match = window.location.pathname.match(/\/(en|fr|nl)\//);
+      if (match) return match[1];
+      return document.documentElement.lang || 'en';  // Default to English
     }
 
     // Extract translated text from FHIR translation extension
