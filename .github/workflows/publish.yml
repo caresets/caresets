@@ -79,6 +79,7 @@ jobs:
           fi
           echo "dest_dir=$dest_dir" >> "$GITHUB_OUTPUT"
           echo "SITE_BASEURL=$site_baseurl" >> "$GITHUB_ENV"
+          echo "MAIN_BASEURL=$GH_PAGES_BASEURL" >> "$GITHUB_ENV"
           echo "Building ${GITHUB_REF_NAME} for baseurl '$site_baseurl' -> gh-pages:/${dest_dir}"
 
       # ---- 1. Did this change touch the content source (input/ or VERSION)? ----
@@ -133,16 +134,23 @@ jobs:
           ruby-version: "3.3"
           bundler-cache: true
 
-      # A branch preview carries preview_branch, which head_custom.html turns
-      # into a noindex meta, so previews stay out of search results.
+      # Every Pages build carries a build stamp (branch, commit, time) that the
+      # footer shows, so a page tells you which build you are looking at.
+      # A branch preview also carries preview_branch, which shows the preview
+      # banner and a noindex meta, so previews stay out of search results.
       - name: Build site for GitHub Pages
         run: |
-          configs=_config.yml
-          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            printf 'preview_branch: "%s"\n' "$GITHUB_REF_NAME" > _config_preview.yml
-            configs="$configs,_config_preview.yml"
-          fi
-          bundle exec jekyll build --config "$configs" --baseurl "$SITE_BASEURL" --destination _site_ghpages
+          {
+            printf 'build_ref: "%s"\n' "$GITHUB_REF_NAME"
+            printf 'build_sha: "%s"\n' "${GITHUB_SHA::7}"
+            printf 'build_time: "%s"\n' "$(date -u +'%Y-%m-%d %H:%M UTC')"
+            printf 'main_baseurl: "%s"\n' "$MAIN_BASEURL"
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              printf 'preview_branch: "%s"\n' "$GITHUB_REF_NAME"
+            fi
+          } > _config_build.yml
+          cat _config_build.yml
+          bundle exec jekyll build --config _config.yml,_config_build.yml --baseurl "$SITE_BASEURL" --destination _site_ghpages
 
       # _config_riziv.yml clears `url`, which otherwise stays pointed at the
       # public GitHub Pages copy and makes every RIZIV page declare that copy
