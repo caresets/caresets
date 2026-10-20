@@ -1,17 +1,31 @@
 name: Build, Publish & Package
 
-# Runs the generation scripts, builds the site, publishes to the gh-pages
-# branch, and produces a downloadable .zip for the RIZIV-INAMI website.
+# Runs the generation scripts, builds the site, publishes it to this
+# repository's gh-pages branch, and produces downloadable .zip files.
+#
+# Where a build lands on gh-pages:
+#
+#   push to main      -> the root, served at  https://<owner>.github.io/<repo>/
+#   push to branch X  -> branches/X/,         https://<owner>.github.io/<repo>/branches/X/
+#   branch X deleted  -> branches/X/ is removed
+#
+# The baseurl is a build-time setting, so a branch build is simply built with
+# the longer one. A deploy from main replaces everything at the root EXCEPT
+# what .github/gh-pages-keep lists (branches/ is always kept).
+#
+# GitHub Pages must be set to serve the gh-pages branch, root folder:
+# Settings > Pages > Build and deployment > Deploy from a branch.
 
 on:
   push:
-    branches: ["main"]
+    branches-ignore: ["gh-pages"]
     paths-ignore:
       - "archive/**"   # the auto-backup commit must not re-trigger this workflow
+  delete:
   workflow_dispatch:
     inputs:
       gh_pages_baseurl:
-        description: "Baseurl for the gh-pages build (must match the repo name for a project page)"
+        description: "Baseurl of the main site (empty = derived from the repo name)"
         required: false
         default: ""
       riziv_baseurl:
@@ -20,29 +34,20 @@ on:
         default: ""
 
 permissions:
-  contents: write        # needed to push to the gh-pages branch
-
-concurrency:
-  group: publish-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write        # push to gh-pages, tag and release
 
 jobs:
-  build-and-publish:
+  build:
+    if: github.event_name != 'delete'
     runs-on: ubuntu-latest
+    # A newer push to the same branch supersedes a build still running.
+    concurrency:
+      group: build-${{ github.ref }}
+      cancel-in-progress: true
+    outputs:
+      dest_dir: ${{ steps.target.outputs.dest_dir }}
     env:
-      # Resolution order: manual "Run workflow" input -> repo variable -> literal default.
-      # Configure persistently in Settings > Secrets and variables > Actions > Variables.
-      # The public repository GitHub Pages serves. This repository is private,
-      # so the built site is pushed there rather than to a branch of this one.
-      # Set it as a repository variable: Settings > Secrets and variables >
-      # Actions > Variables > PAGES_REPO, e.g. caresets/caresets.github.io.
-      PAGES_REPO: ${{ vars.PAGES_REPO || 'caresets/caresets' }}
-
-      # Left blank, the baseurl is derived from PAGES_REPO in the step below.
-      # It must match the repo that SERVES the site, not this one - a project
-      # page is served under /<repo>, and a <name>.github.io repo under /. The
-      # old default was this repository's own name, which would 404 every asset
-      # once the two repositories differ.
+      # Resolution order: manual "Run workflow" input -> repo variable -> derived.
       GH_PAGES_BASEURL: ${{ github.event.inputs.gh_pages_baseurl || vars.GH_PAGES_BASEURL || '' }}
       RIZIV_BASEURL: ${{ github.event.inputs.riziv_baseurl || vars.RIZIV_BASEURL || '' }}
       JEKYLL_ENV: production
@@ -50,9 +55,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ---- 0. Where does this build go, and under which baseurl? ----
+      # A project page is served under /<repo>, a <name>.github.io repo under /.
+      # Branch names become folder names: anything outside [A-Za-z0-9._-]
+      # (a / in feature/x, say) is replaced by -.
+      - name: Resolve the Pages target
+        id: target
+        run: |
+          if [ -z "$GH_PAGES_BASEURL" ]; then
+            name="${GITHUB_REPOSITORY#*/}"
+            case "$name" in
+              *.github.io) GH_PAGES_BASEURL="" ;;
+              *)           GH_PAGES_BASEURL="/$name" ;;
+            esac
+          fi
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            dest_dir=""
+            site_baseurl="$GH_PAGES_BASEURL"
+          else
+            slug=$(printf '%s' "$GITHUB_REF_NAME" | sed 's#[^A-Za-z0-9._-]#-#g')
+            dest_dir="branches/$slug"
+            site_baseurl="$GH_PAGES_BASEURL/$dest_dir"
+          fi
+          echo "dest_dir=$dest_dir" >> "$GITHUB_OUTPUT"
+          echo "SITE_BASEURL=$site_baseurl" >> "$GITHUB_ENV"
+          echo "Building ${GITHUB_REF_NAME} for baseurl '$site_baseurl' -> gh-pages:/${dest_dir}"
+
       # ---- 1. Did this change touch the content source (input/ or VERSION)? ----
-      # If yes  -> regenerate _resources/, snapshot a backup, commit both (Python).
-      # If no   -> skip Python entirely and just build & deploy what's committed.
+      # If yes  -> regenerate _resources/. On main, also snapshot a backup and
+      #            commit both; on a branch, build from the regenerated files
+      #            without committing them.
+      # If no   -> skip Python entirely and just build what's committed.
       - name: Detect content changes
         id: filter
         uses: dorny/paths-filter@v3
@@ -75,10 +108,13 @@ jobs:
         if: steps.filter.outputs.content == 'true' || github.event_name == 'workflow_dispatch'
         run: pip install -r requirements.txt
 
-      - name: Regenerate content + snapshot backup (content changed only)
+      - name: Regenerate content
+        if: steps.filter.outputs.content == 'true' || github.event_name == 'workflow_dispatch'
+        run: python build_content.py      # input/ -> _resources/ (models, glossary, mappings)
+
+      - name: Snapshot backup and commit (main only)
         if: (steps.filter.outputs.content == 'true' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         run: |
-          python build_content.py      # input/ -> _resources/ (models, glossary, mappings)
           python backup_content.py     # snapshot input/ -> archive/v<VERSION>/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -90,38 +126,23 @@ jobs:
             git push
           fi
 
-      # ---- 2. Build the site (always — from the committed/regenerated _resources) ----
+      # ---- 2. Build the site ----
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
           bundler-cache: true
 
-      # Fail here rather than publishing to the wrong place, or building with
-      # a baseurl that silently breaks every stylesheet and script.
-      - name: Resolve the Pages target
-        if: github.ref == 'refs/heads/main'
-        run: |
-          if [ -z "$PAGES_REPO" ]; then
-            echo "::error::PAGES_REPO is not set. Add it under Settings > Secrets"\
-                 " and variables > Actions > Variables, as owner/repo of the public"\
-                 " repository GitHub Pages serves."
-            exit 1
-          fi
-          if [ -z "$GH_PAGES_BASEURL" ]; then
-            name="${PAGES_REPO#*/}"
-            case "$name" in
-              *.github.io) derived="" ;;
-              *)           derived="/$name" ;;
-            esac
-            echo "GH_PAGES_BASEURL=$derived" >> "$GITHUB_ENV"
-            echo "Derived baseurl '$derived' from $PAGES_REPO"
-          else
-            echo "Using the configured baseurl '$GH_PAGES_BASEURL'"
-          fi
-
+      # A branch preview carries preview_branch, which head_custom.html turns
+      # into a noindex meta, so previews stay out of search results.
       - name: Build site for GitHub Pages
-        run: bundle exec jekyll build --baseurl "$GH_PAGES_BASEURL" --destination _site_ghpages
+        run: |
+          configs=_config.yml
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            printf 'preview_branch: "%s"\n' "$GITHUB_REF_NAME" > _config_preview.yml
+            configs="$configs,_config_preview.yml"
+          fi
+          bundle exec jekyll build --config "$configs" --baseurl "$SITE_BASEURL" --destination _site_ghpages
 
       # _config_riziv.yml clears `url`, which otherwise stays pointed at the
       # public GitHub Pages copy and makes every RIZIV page declare that copy
@@ -129,25 +150,21 @@ jobs:
       - name: Build site for RIZIV-INAMI
         run: bundle exec jekyll build --config _config.yml,_config_riziv.yml --baseurl "$RIZIV_BASEURL" --destination _site_riziv
 
-      # ---- 3. Package the RIZIV-INAMI deployable as a .zip ----
+      # ---- 3. Package ----
       - name: Create RIZIV-INAMI zip
         run: (cd _site_riziv && zip -r -q ../riziv-inami-site.zip .)
 
       # Include the zip in the published site so it gets a stable, public URL
-      # (e.g. https://caresets.github.io/glossary/riziv-inami-site.zip)
+      # next to the pages it was built with.
       - name: Add zip to the gh-pages payload
         run: cp riziv-inami-site.zip _site_ghpages/
 
-      # ---- 3b. Zip the built site itself, and keep both zips ----
-      #
-      # caresets-site.zip is the public site exactly as built (baseurl
+      # caresets-site.zip is the Pages site exactly as built (baseurl
       # included), so a run's output can be inspected or archived without
-      # unpacking the Pages repository. Both zips are kept on the run as
-      # artifacts, and on main the site zip is also attached to the rolling
-      # release "site", which gives it one stable URL:
-      #   https://github.com/caresets/caresets-src/releases/latest/download/caresets-site.zip
-      # These run BEFORE the deploy step, so they exist even when the deploy
-      # cannot push (no PAGES_DEPLOY_TOKEN configured).
+      # unpacking gh-pages. Both zips are kept on the run as artifacts, and on
+      # main they are also attached to the rolling release "site", which gives
+      # them one stable URL:
+      #   https://github.com/<owner>/<repo>/releases/latest/download/caresets-site.zip
       - name: Create built-site zip
         run: |
           (cd _site_ghpages && zip -r -q ../caresets-site.zip .)
@@ -167,7 +184,7 @@ jobs:
           path: riziv-inami-site.zip
           retention-days: 90
 
-      - name: Attach the site zip to the rolling release
+      - name: Attach the zips to the rolling release
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -184,30 +201,108 @@ jobs:
           fi
           gh release upload site caresets-site.zip riziv-inami-site.zip --clobber
 
-      # ---- 4. Publish to the public Pages repository (only from main) ----
-      #
-      # GITHUB_TOKEN can only write to this repository, so pushing to another
-      # one needs a token of its own: a fine-grained PAT with Contents: write
-      # on the target, stored here as the secret PAGES_DEPLOY_TOKEN. A deploy
-      # key works too - see the action's `deploy_key` input.
-      - name: Deploy to the public Pages repository
-        if: github.ref == 'refs/heads/main'
-        uses: peaceiris/actions-gh-pages@v4
+      # Handed to the deploy job, which runs in the gh-pages queue.
+      - name: Upload the Pages payload
+        uses: actions/upload-artifact@v4
         with:
-          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
-          external_repository: ${{ env.PAGES_REPO }}
-          publish_dir: ./_site_ghpages
-          # The branch GitHub Pages is configured to serve in the target
-          # repository - main there, not gh-pages. Publishing to the wrong
-          # branch succeeds and changes nothing anyone can see.
-          publish_branch: ${{ vars.PAGES_BRANCH || 'main' }}
-          # Deliberately NOT force_orphan. That replaces the branch's entire
-          # history with a single commit, which is fine for a gh-pages branch
-          # holding only generated output and destructive on a main branch that
-          # may carry a README, a licence, or history worth keeping.
-          #
-          # The action's default already removes files that are no longer in
-          # publish_dir, so the target does not accumulate stale output; it just
-          # does it as an ordinary commit on top of what is there.
-          commit_message: "Publish site from caresets-src"
+          name: pages-payload
+          path: _site_ghpages/
+          include-hidden-files: true
+          retention-days: 1
 
+  # ---- 4. Publish to gh-pages ----
+  #
+  # Every job that writes gh-pages shares one queue and is never cancelled, so
+  # two pushes cannot race and a half-done deploy is not abandoned.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
+    env:
+      DEST_DIR: ${{ needs.build.outputs.dest_dir }}
+    steps:
+      - name: Checkout the keep list
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+          path: src
+
+      - name: Checkout gh-pages
+        run: |
+          git init -q pages
+          cd pages
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin gh-pages; then
+            git checkout -q -b gh-pages FETCH_HEAD
+          else
+            echo "No gh-pages branch yet - starting one."
+            git checkout -q --orphan gh-pages
+          fi
+
+      - name: Download the Pages payload
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-payload
+          path: payload
+
+      - name: Copy the build into place
+        run: |
+          if [ -z "$DEST_DIR" ]; then
+            # Main: replace the root, keeping .git, branches/ and the keep list.
+            excludes=(--exclude=/.git --exclude=/branches/)
+            while IFS= read -r line || [ -n "$line" ]; do
+              line="${line%%#*}"; line="$(echo "$line" | xargs)"
+              [ -n "$line" ] && excludes+=("--exclude=/${line#/}")
+            done < src/.github/gh-pages-keep
+            echo "Keeping: ${excludes[*]}"
+            rsync -a --delete "${excludes[@]}" payload/ pages/
+          else
+            mkdir -p "pages/$DEST_DIR"
+            rsync -a --delete payload/ "pages/$DEST_DIR/"
+          fi
+          # The payload is already built. Without this, Pages would run Jekyll
+          # over it again and drop every folder starting with _ (_resources/).
+          touch pages/.nojekyll
+
+      - name: Commit and push
+        working-directory: pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "gh-pages already matches this build."
+            exit 0
+          fi
+          git commit -q -m "Publish ${GITHUB_REF_NAME} (${GITHUB_SHA::7}) to /${DEST_DIR}"
+          git push origin gh-pages
+
+  # ---- 5. Remove a deleted branch's preview ----
+  cleanup:
+    if: github.event_name == 'delete' && github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
+    steps:
+      - name: Remove branches/<name> from gh-pages
+        env:
+          BRANCH: ${{ github.event.ref }}
+        run: |
+          slug=$(printf '%s' "$BRANCH" | sed 's#[^A-Za-z0-9._-]#-#g')
+          git init -q pages
+          cd pages
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin gh-pages || { echo "No gh-pages branch."; exit 0; }
+          git checkout -q -b gh-pages FETCH_HEAD
+          if [ ! -d "branches/$slug" ]; then
+            echo "No preview at branches/$slug."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -r -q "branches/$slug"
+          git commit -q -m "Remove preview of deleted branch $BRANCH"
+          git push origin gh-pages
