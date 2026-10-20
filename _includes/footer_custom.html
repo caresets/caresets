@@ -8,9 +8,22 @@ which the theme renders as a literal string.
 Build stamp, set by publish.yml for the GitHub Pages build only: which branch
 and commit the page was built from, and when. Shown as the tooltip of the
 content version, not as text. Absent from local and RIZIV builds.
+
+Which copy this is IS shown as text: the release tag at the root and in a
+release folder (the root is only ever built from a release), "Development
+version" in dev/, the branch name in a branch preview.
 {%- endcomment -%}
 {%- if site.build_sha -%}
-<span style="cursor: help" title="Built from {{ site.build_ref | escape }} @ {{ site.build_sha }}, {{ site.build_time }}">Content version {{ site.content_version }}</span>
+{%- assign lang = page.lang | default: 'en' -%}
+{%- assign ref = site.build_ref | escape -%}
+{%- if site.site_kind == 'dev' -%}
+  {%- if lang == 'fr' %}{% assign copy = 'Version de développement' %}{% elsif lang == 'nl' %}{% assign copy = 'Ontwikkelversie' %}{% else %}{% assign copy = 'Development version' %}{% endif -%}
+{%- elsif site.site_kind == 'branch' -%}
+  {%- if lang == 'fr' %}{% assign copy = 'Aperçu de la branche ' | append: ref %}{% elsif lang == 'nl' %}{% assign copy = 'Voorbeeld van branch ' | append: ref %}{% else %}{% assign copy = 'Branch preview ' | append: ref %}{% endif -%}
+{%- else -%}
+  {%- if lang == 'fr' %}{% assign copy = 'Version ' | append: ref %}{% elsif lang == 'nl' %}{% assign copy = 'Versie ' | append: ref %}{% else %}{% assign copy = 'Release ' | append: ref %}{% endif -%}
+{%- endif -%}
+<span style="cursor: help" title="Built from {{ ref }} @ {{ site.build_sha }}, {{ site.build_time }}">{{ copy }} | Content version {{ site.content_version }}</span>
 {%- else -%}
 Content version {{ site.content_version }}
 {%- endif %} | Copyright &copy; 2025 RIZIV-INAMI
