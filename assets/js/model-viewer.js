@@ -41,12 +41,12 @@
 
     // Get current language from URL path (e.g., /en/, /fr/, etc.)
     function getCurrentLanguage() {
-      var pathParts = window.location.pathname.split('/').filter(function(p) { return p !== ''; });
-      // Assume first part is language code if it's 2-3 characters
-      if (pathParts.length > 0 && pathParts[0].length >= 2 && pathParts[0].length <= 3) {
-        return pathParts[0];
-      }
-      return 'en';  // Default to English
+      // The language folder can sit under a baseurl of any depth
+      // (/caresets/fr/..., /caresets/branches/x/fr/...), so look for it
+      // anywhere in the path rather than in the first segment.
+      var match = window.location.pathname.match(/\/(en|fr|nl)\//);
+      if (match) return match[1];
+      return document.documentElement.lang || 'en';  // Default to English
     }
 
     // Extract translated text from FHIR translation extension
@@ -59,8 +59,14 @@
       var defaultText = element[field] || '';
       var currentLang = getCurrentLanguage();
 
-      // If current language is English or no translation field exists, return default
-      if (currentLang === 'en' || !element['_' + field]) {
+      // The untranslated fields are not always English. `language` on the
+      // StructureDefinition says which language they are in; models generated
+      // from a workbook with no English fall back to French or Dutch, and
+      // their base text is that language. Assuming English here would show a
+      // French definition to an English reader while an English translation
+      // sat unused in the extension.
+      var baseLang = (structureDefinition && structureDefinition.language) || 'en';
+      if (currentLang === baseLang || !element['_' + field]) {
         return defaultText;
       }
 
@@ -107,7 +113,10 @@
     document.addEventListener('DOMContentLoaded', function() {
       // Get model name from URL parameter
       var urlParams = new URLSearchParams(window.location.search);
-      modelName = urlParams.get('model');
+      // ?model= is the only attacker-controllable input on the page and it is
+      // interpolated into a fetch path. Accept a bare model name only, so it
+      // cannot walk out of _resources/models/ with ../ or a query string.
+      modelName = sanitizeModelName(urlParams.get('model'));
 
       // Get element path from URL fragment (e.g., #Patient.identifier)
       if (window.location.hash) {
@@ -115,8 +124,13 @@
         console.log('Target element path from URL:', targetElementPath);
       }
 
-      // Load available models for dropdown, then initialize if we have a model
-      loadModelsList().then(function() {
+      // The ConceptMap has to be indexed before any element is rendered, or
+      // the glossary column comes out empty on the first draw.
+      // Promise.all rather than a chain: it is a separate file and there is no
+      // reason to wait for the model list before starting it.
+      var vsIndexUrl = ((window.SITE_CONFIG && window.SITE_CONFIG.baseUrl) || '') + '/_resources/valuesets.json';
+      var pubUrl = ((window.SITE_CONFIG && window.SITE_CONFIG.baseUrl) || '') + '/_resources/models-publications.json';
+      Promise.all([loadConceptMap(), loadValueSetIndex(vsIndexUrl), loadPublications(pubUrl), loadModelsList()]).then(function() {
         if (modelName) {
           initializeModel();
         } else {
@@ -130,6 +144,98 @@
       document.getElementById('modelSelector').addEventListener('change', handleModelSelection);
     });
   
+    // element path -> {code, display}, from the published ConceptMap.
+    //
+    // The mapping used to live on the element as element.code. It is now a
+    // ConceptMap of its own, so that the StructureDefinitions stay identical to
+    // the ones published upstream - which means this table has to look it up
+    // rather than read it off the element.
+    var conceptMap = {};
+    var conceptMapLoaded = null;
+
+    // ValueSet names and pages, built by make_valueset_index.py at content time.
+    var valueSetIndex = {};
+
+    // First and latest publication of each model, from the publisher's release
+    // history (make_publication_history.py). Shown as a hover on the date.
+    var publications = {};
+
+    function loadPublications(url) {
+      if (!url) { return Promise.resolve(); }
+      return fetch(url)
+        .then(function(r) { return r.ok ? r.json() : {}; })
+        .then(function(p) { publications = p || {}; })
+        .catch(function(e) { console.warn('Publication history not loaded:', e); });
+    }
+
+    function publicationTitle(name) {
+      var p = publications[name];
+      if (!p) { return ''; }
+      if (!p.first) { return 'Not in a published release yet'; }
+      var s = 'First published ' + p.first.date + ' (release ' + p.first.version + ')';
+      if (p.latest && p.latest.version !== p.first.version) {
+        s += '\nLatest release ' + p.latest.version + ', ' + p.latest.date;
+      }
+      if (p.releases && p.releases.length > 1) { s += '\nIn ' + p.releases.length + ' releases'; }
+      return s;
+    }
+
+    function loadValueSetIndex(url) {
+      if (!url) { return Promise.resolve(); }
+      return fetch(url)
+        .then(function(r) { return r.ok ? r.json() : {}; })
+        .then(function(idx) { valueSetIndex = idx || {}; })
+        .catch(function(e) { console.warn('ValueSet index not loaded:', e); });
+    }
+
+    // http://hl7.org/fhir/ValueSet/x resolves to the current FHIR release; the
+    // models say which release they are (fhirVersion 4.0.1 -> R4), so link there.
+    function releaseSpecificUrl(canonical) {
+      var m = /^https?:\/\/hl7\.org\/fhir\/ValueSet\/([^\/|]+)$/.exec(canonical);
+      if (!m) { return canonical; }
+      var v = (structureDefinition && structureDefinition.fhirVersion) || '';
+      var release = v.indexOf('4.0') === 0 ? 'R4' : v.indexOf('4.3') === 0 ? 'R4B' :
+                    v.indexOf('5.0') === 0 ? 'R5' : v.indexOf('3.0') === 0 ? 'STU3' : null;
+      return release ? 'http://hl7.org/fhir/' + release + '/valueset-' + m[1] + '.html' : canonical;
+    }
+
+    function loadConceptMap() {
+      if (conceptMapLoaded) {
+        return conceptMapLoaded;
+      }
+      var baseUrl = window.SITE_CONFIG && window.SITE_CONFIG.baseUrl
+        ? window.SITE_CONFIG.baseUrl : '';
+      var url = baseUrl + '/_resources/glossary/ConceptMap-model-to-glossary.json';
+      var system = getGlossaryConfig().system;
+
+      // A missing or unreadable ConceptMap costs the glossary column, not the
+      // table: the models are what the page is for.
+      conceptMapLoaded = fetch(url)
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(cm) {
+          if (!cm || cm.resourceType !== 'ConceptMap' || !Array.isArray(cm.group)) {
+            return;
+          }
+          cm.group.forEach(function(group) {
+            if (system && group.target !== system) {
+              return;
+            }
+            (group.element || []).forEach(function(el) {
+              var target = (el.target || [])[0];
+              if (el.code && target && target.code) {
+                conceptMap[el.code] = {
+                  code: target.code,
+                  display: target.display || target.code
+                };
+              }
+            });
+          });
+          console.log('ConceptMap: ' + Object.keys(conceptMap).length + ' mapping(s)');
+        })
+        .catch(function(e) { console.warn('ConceptMap not loaded:', e); });
+      return conceptMapLoaded;
+    }
+
     function loadModelsList() {
       var manifestUrl = window.SITE_CONFIG.baseUrl + '/_resources/models-manifest.json';
 
@@ -199,7 +305,8 @@
         var options = '<option value="">-- Select a model --</option>';
         models.forEach(function(model) {
           var selected = model.file === modelName ? ' selected' : '';
-          options += '<option value="' + model.file + '"' + selected + '>' + escapeHtml(model.title) + '</option>';
+          options += '<option value="' + escapeHtml(model.file) + '"' + selected + '>' +
+                     escapeHtml(model.title) + '</option>';
         });
 
         selector.innerHTML = options;
@@ -231,6 +338,8 @@
           console.log('StructureDefinition loaded:', data);
           structureDefinition = data;
           processStructureDefinition(data);
+          // Other views of the same model (the UML tab) draw from this.
+          document.dispatchEvent(new CustomEvent('caresets:model-loaded', { detail: { sd: data, file: modelName } }));
         })
         .catch(function(error) {
           console.error('Error loading StructureDefinition:', error);
@@ -296,31 +405,33 @@
         if (dateValue.indexOf('T') > -1) {
           dateValue = dateValue.split('T')[0];
         }
+        // the date is the served version's; hovering it shows the first publication
+        var pubTitle = publicationTitle(sd.name);
         tbody += '<td style="padding: 6px; border: 1px solid #ddd; font-weight: bold; width: 150px;">Date</td>' +
-                 '<td style="padding: 6px; border: 1px solid #ddd;">' + escapeHtml(dateValue) + '</td>';
+                 '<td style="padding: 6px; border: 1px solid #ddd;"' + (pubTitle ? ' title="' + escapeAttr(pubTitle) + '"' : '') + '>' +
+                 escapeHtml(dateValue) + (pubTitle ? ' <span style="color:#5c5962;cursor:help">&#9432;</span>' : '') + '</td>';
       }
       tbody += '</tr>';
 
-      // Third row: Publisher and Type
+      // Third row: Publisher
       tbody += '<tr>';
       if (sd.publisher) {
         tbody += '<td style="padding: 6px; border: 1px solid #ddd; font-weight: bold; width: 150px;">Publisher</td>' +
                  '<td style="padding: 6px; border: 1px solid #ddd;" colspan="2">' + escapeHtml(sd.publisher) + '</td>';
       }
-      if (sd.type) {
-        tbody += '<td style="padding: 6px; border: 1px solid #ddd; font-weight: bold; width: 150px;">Type</td>' +
-                 '<td style="padding: 6px; border: 1px solid #ddd;" colspan="2">' + escapeHtml(sd.type) + '</td>';
+      // The FHIR release the model is defined for. It decides which version an
+      // unversioned canonical (http://hl7.org/fhir/ValueSet/...) resolves to.
+      if (sd.fhirVersion) {
+        var fv = sd.fhirVersion;
+        var fvRelease = fv.indexOf('4.0') === 0 ? 'R4' : fv.indexOf('4.3') === 0 ? 'R4B' :
+                        fv.indexOf('5.0') === 0 ? 'R5' : fv.indexOf('3.0') === 0 ? 'STU3' : '';
+        // One cell, read as a sentence: "Expressed for FHIR release R4 (4.0.1)".
+        tbody += '<td style="padding: 6px; border: 1px solid #ddd;" colspan="3">' +
+                 '<span style="font-weight: bold;">Expressed for FHIR release ' +
+                 escapeHtml(fvRelease ? fvRelease + ' (' + fv + ')' : fv) + '</span></td>';
       }
       tbody += '</tr>';
 
-      // Fourth row: Base Definition as link
-      if (sd.baseDefinition) {
-        var baseName = sd.baseDefinition.split('/').pop();
-        tbody += '<tr><td style="padding: 6px; border: 1px solid #ddd; font-weight: bold; width: 150px;">Base Definition</td>' +
-                 '<td style="padding: 6px; border: 1px solid #ddd;" colspan="5">' +
-                 '<a href="' + escapeAttr(sd.baseDefinition) + '" target="_blank" rel="noopener noreferrer">' +
-                 escapeHtml(baseName) + '</a></td></tr>';
-      }
 
       document.querySelector('#metadataTable tbody').innerHTML = tbody;
     }
@@ -428,6 +539,12 @@
       var hierarchy = buildHierarchy(elements);
       var tableBody = renderHierarchy(hierarchy, 0);
       
+      // Switching model re-renders into the same table. DataTables refuses to
+      // initialise twice on one element, so tear the previous instance down
+      // (which also removes its search box and buttons) before rebuilding.
+      if ($.fn.DataTable.isDataTable('#elementsTable')) {
+        $('#elementsTable').DataTable().destroy();
+      }
       document.querySelector('#elementsTable tbody').innerHTML = tableBody;
       
       dataTable = $('#elementsTable').DataTable({
@@ -444,32 +561,29 @@
             applyHighlight();
           }
         },
-        buttons: [
-          {
-            extend: 'excelHtml5',
+        buttons: (function () {
+          var flags = (window.SITE_CONFIG && window.SITE_CONFIG.exports) || { excel: false, pdf: false, csv: true };
+          var list = [];
+          if (flags.excel) { list.push({ extend: 'excelHtml5',
             text: 'Excel',
             filename: 'model-' + modelName,
             className: 'hidden-button',
-            exportOptions: { columns: ':visible' }
-          },
-          {
-            extend: 'pdfHtml5',
+            exportOptions: { columns: ':visible' } }); }
+          if (flags.pdf) { list.push({ extend: 'pdfHtml5',
             text: 'PDF',
             filename: 'model-' + modelName,
             title: getTranslatedText(structureDefinition, 'title') || structureDefinition.name || modelName,
             className: 'hidden-button',
             orientation: 'landscape',
             pageSize: 'A4',
-            exportOptions: { columns: ':visible' }
-          },
-          {
-            extend: 'csvHtml5',
+            exportOptions: { columns: ':visible' } }); }
+          if (flags.csv) { list.push({ extend: 'csvHtml5',
             text: 'CSV',
             filename: 'model-' + modelName,
             className: 'hidden-button',
-            exportOptions: { columns: ':visible' }
-          }
-        ]
+            exportOptions: { columns: ':visible' } }); }
+          return list;
+        })()
       });
       
       $('.dt-buttons').hide();
@@ -637,10 +751,32 @@
     }
   
     function renderElement(item, depth) {
+
+    // Short explanation of a data type, for the hover on the Type column.
+    // The texts come from _data/ui.yml (per language) through the page config.
+    function typeHelpFor(element) {
+      var help = (window.SITE_CONFIG && window.SITE_CONFIG.typeHelp) || {};
+      var seen = {};
+      var lines = [];
+      (element.type || []).forEach(function(t) {
+        var code = (t.code || '').split('/').pop().replace(/^System\./, '');
+        if (/^System/.test(t.code || '')) { code = code.charAt(0).toLowerCase() + code.slice(1); }
+        if (!code || seen[code]) { return; }
+        seen[code] = true;
+        if (help[code]) { lines.push(code + ': ' + help[code]); }
+      });
+      return lines.join('\n');
+    }
       var element = item.element;
       var path = element.path;
       var parts = path.split('.');
-      var name = parts[parts.length - 1];
+      // value[x] is FHIR's choice marker; the types column already says what the choices are
+      var name = parts[parts.length - 1].replace(/\[x\]$/, '');
+      // The root row is the model itself: show its name, not the id-shaped
+      // type the publisher used as the root path (be-model-allergyintolerance).
+      if (depth === 0 && structureDefinition && structureDefinition.name) {
+        name = structureDefinition.name;
+      }
       
       var card = (element.min || '0') + '..' + (element.max || '*');
       
@@ -696,32 +832,53 @@
         });
       }
       var typeStr = types.join(', ') || (element.contentReference ? 'See ' + element.contentReference : '');
+      var typeHelp = typeHelpFor(element);
 
       // Get translated description based on current language
       var description = getTranslatedText(element, 'short') || getTranslatedText(element, 'definition') || '';
+      // The full definition is shown on hover over the element name; the row keeps the short text.
+      var definitionText = getTranslatedText(element, 'definition') || '';
 
-      // Check for glossary concept
+      // The glossary concept: from the model's own element.code where it has
+      // one, otherwise from the ConceptMap. A model that states its own mapping
+      // is making a first-hand claim about itself; the ConceptMap is a
+      // statement made about it from outside, so the model wins.
       var glossary = '';
+      var concept = null;
       if (element.code && Array.isArray(element.code)) {
         var config = getGlossaryConfig();
         element.code.forEach(function(coding) {
-          if (coding.system === config.system && coding.code) {
-            var display = coding.display || coding.code;
-            var conceptUrl = getGlossaryUrl(coding.code);
-            glossary = '<a href="' + escapeAttr(conceptUrl) + '" target="_blank" rel="noopener noreferrer">' +
-                       escapeHtml(display) + '</a>';
+          if (coding.system === config.system && coding.code && !concept) {
+            concept = { code: coding.code, display: coding.display || coding.code };
           }
         });
+      }
+      if (!concept) {
+        concept = conceptMap[element.path] || conceptMap[element.id] || null;
+      }
+      if (concept) {
+        glossary = '<a href="' + escapeAttr(getGlossaryUrl(concept.code)) + '"' +
+                   ' target="_blank" rel="noopener noreferrer">' +
+                   escapeHtml(concept.display) + '</a>';
       }
 
       var binding = '';
       if (element.binding) {
         var strength = element.binding.strength || '';
         var valueSet = element.binding.valueSet || '';
-        binding = strength;
+        // Rendered as HTML: the ValueSet name links to its canonical URL, which
+        // the publisher resolves to the ValueSet's page; a |version suffix is
+        // dropped from the link. Opens in a new window.
+        binding = escapeHtml(strength);
         if (valueSet) {
-          var vsName = valueSet.split('/').pop();
-          binding += ': ' + vsName;
+          var vsUrl = valueSet.split('|')[0];
+          var vsInfo = valueSetIndex[vsUrl];
+          // Name and page from the index built at content time; otherwise the
+          // URL's last segment, linked to the page of the models' own FHIR
+          // release for HL7 core ValueSets (the bare canonical goes to R5).
+          var vsLabel = (vsInfo && (vsInfo.title || vsInfo.name)) || vsUrl.split('/').pop();
+          var vsHref = (vsInfo && vsInfo.page) || releaseSpecificUrl(vsUrl);
+          binding += ': <a href="' + escapeAttr(vsHref) + '" target="_blank" rel="noopener noreferrer" title="' + escapeAttr(vsUrl) + '">' + escapeHtml(vsLabel) + '</a>';
         }
       }
       
@@ -771,7 +928,8 @@
       var elementCell = '<div class="element-cell" style="padding-left: ' + indent + 'px; position: relative; min-height: 20px; z-index: 2;">' +
                         '<div style="position: relative; display: flex; align-items: center;">' +
                         expandIcon +
-                        '<span class="element-name" style="font-family: monospace; font-weight: ' + (depth === 0 ? 'bold' : 'normal') + ';">' +
+                        '<span class="element-name" style="font-family: monospace; font-weight: ' + (depth === 0 ? 'bold' : 'normal') + ';"' +
+                        (definitionText ? ' title="' + escapeAttr(definitionText) + '"' : '') + '>' +
                         escapeHtml(name) +
                         '</span></div></div>';
       
@@ -789,10 +947,10 @@
       return '<tr class="' + rowClass + '" data-path="' + escapeAttr(path) + '" data-depth="' + depth + '" data-vlines="' + vlineData + '" style="--parent-indent: ' + indent + 'px;">' +
              '<td class="element-col" data-vlines="' + vlineData + '" style="position: relative;">' + connectorHtml + elementCell + '</td>' +
              '<td>' + escapeHtml(card) + '</td>' +
-             '<td>' + (hasHtmlInTypes ? typeStr : escapeHtml(typeStr)) + '</td>' +
+             '<td' + (typeHelp ? ' title="' + escapeAttr(typeHelp) + '"' : '') + '>' + (hasHtmlInTypes ? typeStr : escapeHtml(typeStr)) + '</td>' +
              '<td>' + escapeHtml(description) + '</td>' +
              '<td>' + glossary + '</td>' +
-             '<td>' + escapeHtml(binding) + '</td>' +
+             '<td>' + binding + '</td>' +
              '</tr>';
     }
   
@@ -830,6 +988,20 @@
       $('.child-row').hide();
     }
   
+    // Model names are file-name stems: letters, digits, dash, underscore, dot.
+    // Anything else is rejected outright rather than cleaned, so a malformed
+    // value fails visibly instead of silently fetching something unintended.
+    function sanitizeModelName(value) {
+      if (!value) {
+        return null;
+      }
+      if (!/^[A-Za-z0-9._-]{1,128}$/.test(value) || value.indexOf('..') !== -1) {
+        console.warn('Rejected model name from URL:', value);
+        return null;
+      }
+      return value;
+    }
+
     function escapeHtml(text) {
       if (!text) return '';
       var div = document.createElement('div');
@@ -921,11 +1093,23 @@
       
       var visibleRows = $('#elementsTable tbody tr:visible');
       visibleRows.each(function() {
+        // The first cell holds the expand/collapse triangle and an indented
+        // name; the export wants the name alone, indented with non-breaking
+        // spaces (four per level) so the tree survives a markdown table.
+        var depthMatch = /depth-(\d+)/.exec($(this).attr('class') || '');
+        var depth = depthMatch ? parseInt(depthMatch[1], 10) : 0;
         var cells = $(this).find('td');
         var rowData = [];
-        cells.each(function() {
-          var text = $(this).text().trim().replace(/\|/g, '\\|').replace(/\n/g, ' ');
-          rowData.push(text);
+        cells.each(function(i) {
+          var text;
+          if (i === 0) {
+            var nameEl = $(this).find('.element-name');
+            text = (nameEl.length ? nameEl.text() : $(this).text()).replace(/[▶▼]/g, '').trim();
+            text = new Array(depth * 4 + 1).join('&nbsp;') + text;
+          } else {
+            text = $(this).text().trim();
+          }
+          rowData.push(text.replace(/\|/g, '\\|').replace(/\n/g, ' '));
         });
         content.push('| ' + rowData.join(' | ') + ' |');
       });
