@@ -1,17 +1,13 @@
 """
 Write the Versions page at the root of the published site: /versions/.
 
-One page, at one address, listing every copy the site is published as:
-
-  the releases     newest first, each with its date, content version and
-                   release notes, a link to its copy and its two zips; the
-                   newest is the one at the root (the published version)
-  dev/             the development version, built from main
-  branches/<x>/    the branch previews currently up
+One page, at one address, listing the releases - newest first, each with
+its date, content version and release notes, a link to its copy and its two
+zips; the newest is the one at the root (the published version) - and the
+development version (dev/). Branch previews are deliberately not listed.
 
 publish.yml runs this in its deploy step, on the gh-pages checkout, every
-time anything is published, and again when a branch preview is removed - so
-the page is always current, whichever copy changed. The page is plain HTML
+time anything is published, so the page is always current. The page is plain HTML
 written here, not a Jekyll page: no copy of the site owns it, and a release
 replacing the root leaves it alone.
 
@@ -21,7 +17,6 @@ replacing the root leaves it alone.
   title, notes     from the tag's GitHub release, when there is one (written
                    there by whoever made the release; see the cut-release
                    skill); without the API the page lists them without notes
-  previews         the folders under <pages>/branches/
 
 Reads the GitHub API with GH_TOKEN or GITHUB_TOKEN when set.
 
@@ -153,17 +148,11 @@ def page(data, pages_dir):
                 "<th>Release notes</th><th>Open</th></tr></thead><tbody>%s</tbody></table>"
                 % "".join(rows)) if rows else "<p><em>No release yet.</em></p>"
 
-    previews = sorted(d for d in os.listdir(os.path.join(pages_dir, "branches"))
-                      if os.path.isdir(os.path.join(pages_dir, "branches", d))) \
-        if os.path.isdir(os.path.join(pages_dir, "branches")) else []
-    others = []
     if os.path.isdir(os.path.join(pages_dir, "dev")):
-        others.append("<li><a href=\"%s/dev/en/\">Development version</a> — everything "
-                      "accepted on <code>main</code> since the last release</li>" % base)
-    for d in previews:
-        others.append("<li><a href=\"%s/branches/%s/en/\">Branch preview: %s</a></li>"
-                      % (base, esc(d), esc(d)))
-    others_html = ("<ul>%s</ul>" % "".join(others)) if others else "<p><em>None.</em></p>"
+        others_html = ("<ul><li><a href=\"%s/dev/en/\">Development version</a> — everything "
+                       "accepted on <code>main</code> since the last release</li></ul>" % base)
+    else:
+        others_html = "<p><em>None.</em></p>"
 
     current = data["releases"][0]["tag"] if data["releases"] else ""
     return PAGE.format(base=base, current=esc(current), releases=releases,
@@ -210,7 +199,7 @@ Every release stays available as it was published.</p>
 <div class="wrap">{releases}</div>
 
 <h2>Work in progress</h2>
-<p class="lead">Not published: copies to check changes before a release.</p>
+<p class="lead">Not published: the next release, as it stands.</p>
 {others}
 
 <p class="lead" style="margin-top:3rem">Releases on GitHub:
