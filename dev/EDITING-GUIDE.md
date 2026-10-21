@@ -19,7 +19,7 @@ GitHub builds the site for you after every change. You never run a script.
 | <https://caresets.github.io/caresets/v0.9.1/> | One release, kept exactly as it was published | never |
 | <https://caresets.github.io/caresets/dev/> | **Development version**: everything accepted so far | something is saved to `main` |
 | `https://caresets.github.io/caresets/branches/<name>/` | **Preview** of one proposed change | something is saved to that branch |
-| <https://caresets.github.io/caresets/versions/> | **Versions**: every release with its notes, plus `/dev/` and the branch previews currently up | anything is published |
+| <https://caresets.github.io/caresets/versions/> | **Versions**: every release with its notes, plus `/dev/` | anything is published |
 
 Every copy except the published one has a coloured banner at the top saying
 what it is. The **footer** of every page says which copy you are on
