@@ -1,0 +1,116 @@
+name: Update models from eHealth
+
+# A button for fetching the logical models eHealth has published, for people
+# who do not run Python themselves: Actions > Update models from eHealth >
+# Run workflow.
+#
+# It runs fetch_ehealth_models.py --apply and build_content.py on a copy of
+# main, and if anything changed it puts the result on a new branch
+# models/ehealth-<date>, builds that branch's preview at
+#   https://<owner>.github.io/<repo>/branches/models-ehealth-<date>/
+# and opens a draft pull request. Nothing reaches main until someone merges
+# that pull request; nothing reaches the published site until a release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      guides:
+        description: "Only these guides, space-separated (e.g. core-clinical medication); empty = all"
+        required: false
+        default: ""
+
+permissions:
+  contents: write        # push the branch
+  pull-requests: write   # open the draft pull request
+  actions: write         # start the preview build of the branch
+
+concurrency:
+  group: update-models
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch the published models
+        env:
+          GUIDES: ${{ github.event.inputs.guides }}
+        run: |
+          set -o pipefail
+          args=(--apply)
+          [ -n "$GUIDES" ] && args+=(--ig $GUIDES)
+          python fetch_ehealth_models.py "${args[@]}" | tee fetch-report.txt
+
+      - name: Regenerate the site content
+        run: python build_content.py | tee build-report.txt
+
+      # A branch push made with the workflow's own token starts no other
+      # workflow, so the preview build is started explicitly; workflow_dispatch
+      # is the one trigger that token may use.
+      - name: Put the changes on a branch and open a draft pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add -A input imports _resources glossary-changes
+          if git diff --cached --quiet; then
+            echo "No model has changed since the last update - nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          branch="models/ehealth-$(date -u +%Y%m%d-%H%M)"
+          slug=$(printf '%s' "$branch" | sed 's#[^A-Za-z0-9._-]#-#g')
+          name="${GITHUB_REPOSITORY#*/}"
+          preview="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/$name/branches/$slug/"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -q -c "$branch"
+          git commit -q -m "Update models from eHealth ($(date -u +%Y-%m-%d))"
+          git push -q origin "$branch"
+          gh workflow run publish.yml --ref "$branch"
+
+          {
+            echo "Models fetched from the eHealth FHIR packages by the"
+            echo "\"Update models from eHealth\" workflow, run by @${GITHUB_ACTOR}."
+            echo
+            echo "**Preview** (ready a few minutes after this pull request opens): $preview"
+            echo
+            echo "Changed files:"
+            echo
+            git diff --stat HEAD~1 HEAD | sed 's/^/    /'
+            echo
+            echo "<details><summary>Fetch report</summary>"
+            echo
+            echo '```'
+            cat fetch-report.txt
+            echo '```'
+            echo "</details>"
+          } > pr-body.md
+
+          if url=$(gh pr create --draft --base main --head "$branch" \
+                     --title "Update models from eHealth ($(date -u +%Y-%m-%d))" \
+                     --body-file pr-body.md 2>pr-error.txt); then
+            pr="Draft pull request: $url"
+          else
+            # The organisation can forbid workflows to open pull requests.
+            pr="Could not open the pull request ($(cat pr-error.txt)). Open it by hand: https://github.com/$GITHUB_REPOSITORY/compare/main...$branch"
+          fi
+          {
+            echo "### Models updated on branch \`$branch\`"
+            echo
+            echo "- Preview: $preview"
+            echo "- $pr"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
