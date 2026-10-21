@@ -4,6 +4,8 @@ Source for the BeSafeShare **glossary** and **logical data model** documentation
 
 ## TL;DR for maintainers
 
+**Working from a browser, without Python or an IDE?** Read [EDITING-GUIDE.md](EDITING-GUIDE.md): changing the glossary, the pages and the models, reviewing, and publishing a release, all on GitHub.
+
 **Two things are authored, and they are both Excel workbooks.** Everything else
 in this repository is generated from them or arrives from the publication
 process.
