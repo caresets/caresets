@@ -19,7 +19,7 @@ GitHub builds the site for you after every change. You never run a script.
 | <https://caresets.github.io/caresets/v0.9.1/> | One release, kept exactly as it was published | never |
 | <https://caresets.github.io/caresets/dev/> | **Development version**: everything accepted so far | something is saved to `main` |
 | `https://caresets.github.io/caresets/branches/<name>/` | **Preview** of one proposed change | something is saved to that branch |
-| <https://caresets.github.io/caresets/en/versions/> | The list of releases, with release notes | a release is made |
+| <https://caresets.github.io/caresets/versions/> | **Versions**: every release with its notes, plus `/dev/` and the branch previews currently up | anything is published |
 
 Every copy except the published one has a coloured banner at the top saying
 what it is. The **footer** of every page says which copy you are on
@@ -231,7 +231,7 @@ After about 5 minutes:
 
 - <https://caresets.github.io/caresets/> says "Release v0.9.2" in the footer;
 - <https://caresets.github.io/caresets/v0.9.2/> exists;
-- <https://caresets.github.io/caresets/en/versions/> lists it first, with the
+- <https://caresets.github.io/caresets/versions/> lists it first, with the
   notes;
 - the release on GitHub has two downloads: `caresets-site.zip` (the site as
   published here) and `riziv-inami-site.zip` (the copy for the RIZIV-INAMI
