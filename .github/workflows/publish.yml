@@ -10,6 +10,8 @@ name: Build, Publish & Package
 #   push to main         -> dev/          (the development version)
 #   push to branch X     -> branches/X/   (a preview of that branch)
 #   branch X deleted     -> branches/X/ is removed
+#   any of these         -> versions/ is rewritten: the list of releases (with
+#                           their notes), dev/ and the branch previews
 #
 # A release tag is a version number, with or without a v: 1.0.0, v1.0.0,
 # 1.0.0-rc1. Other tags (site, uml-preview) are not releases and build nothing.
@@ -154,19 +156,6 @@ jobs:
             git push
           fi
 
-      # The Versions page lists every release tag, with the notes from its
-      # GitHub release. The checkout is shallow and has no tags, so fetch them
-      # (just the tagged commits). For a release this includes its own tag;
-      # its GitHub release may not exist yet, so its notes appear from the
-      # next build on - unless the release was drafted first, as the
-      # cut-release skill does.
-      - name: List the releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git fetch -q --force --depth=1 origin '+refs/tags/*:refs/tags/*'
-          python3 make_release_list.py
-
       # ---- 2. Build the site ----
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
@@ -281,11 +270,16 @@ jobs:
       DEST_DIR: ${{ needs.build.outputs.dest_dir }}
       RELEASE: ${{ needs.build.outputs.release }}
     steps:
-      - name: Checkout the keep list
+      # The keep list and make_versions_page.py, with the release tags the
+      # Versions page lists (just the tagged commits).
+      - name: Checkout the source
         uses: actions/checkout@v4
         with:
-          sparse-checkout: .github
           path: src
+
+      - name: Fetch the release tags
+        working-directory: src
+        run: git fetch -q --force --depth=1 origin '+refs/tags/*:refs/tags/*'
 
       - name: Checkout gh-pages
         run: |
@@ -318,15 +312,15 @@ jobs:
           mkdir -p "pages/$DEST_DIR"
           rsync -a --delete payload/ "pages/$DEST_DIR/"
 
-      # A release also replaces the root. Kept: .git, dev/, branches/, the keep
-      # list, and every folder holding a site of its own (en/index.html) that
+      # A release also replaces the root. Kept: .git, dev/, branches/,
+      # versions/, the keep list, and every folder holding a site of its own (en/index.html) that
       # the root build does not produce - that is, every release folder,
       # including the one just written. Anything else at the root that the
       # new build no longer produces is deleted.
       - name: Replace the root (release only)
         if: env.RELEASE == 'true'
         run: |
-          excludes=(--exclude=/.git --exclude=/dev/ --exclude=/branches/)
+          excludes=(--exclude=/.git --exclude=/dev/ --exclude=/branches/ --exclude=/versions/)
           while IFS= read -r line || [ -n "$line" ]; do
             line="${line%%#*}"; line="$(echo "$line" | xargs)"
             [ -n "$line" ] && excludes+=("--exclude=/${line#/}")
@@ -339,6 +333,15 @@ jobs:
           done
           echo "Keeping: ${excludes[*]}"
           rsync -a --delete "${excludes[@]}" root/ pages/
+
+      # /versions/ lists the releases (with the notes from their GitHub
+      # releases), dev/ and the branch previews, so it is rewritten whenever
+      # any of them changes. A release made on GitHub exists before its tag
+      # is pushed, so its notes are in its own publish.
+      - name: Write the Versions page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 src/make_versions_page.py pages
 
       # The payload is already built. Without this, Pages would run Jekyll
       # over it again and drop every folder starting with _ (_resources/).
@@ -368,9 +371,19 @@ jobs:
       group: gh-pages
       cancel-in-progress: false
     steps:
+      - name: Checkout the source
+        uses: actions/checkout@v4
+        with:
+          path: src
+
+      - name: Fetch the release tags
+        working-directory: src
+        run: git fetch -q --force --depth=1 origin '+refs/tags/*:refs/tags/*'
+
       - name: Remove branches/<name> from gh-pages
         env:
           BRANCH: ${{ github.event.ref }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           slug=$(printf '%s' "$BRANCH" | sed 's#[^A-Za-z0-9._-]#-#g')
           git init -q pages
@@ -385,5 +398,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm -r -q "branches/$slug"
+          python3 ../src/make_versions_page.py .
+          git add versions
           git commit -q -m "Remove preview of deleted branch $BRANCH"
           git push origin gh-pages

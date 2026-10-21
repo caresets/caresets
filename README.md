@@ -118,7 +118,7 @@ A publish from a release replaces the root of `gh-pages`, but never touches `dev
 
 1. Bump `VERSION` and `content_version` in `_config.yml` (also editable in the browser), commit to `main`, and check the result at `/caresets/dev/`. The version names the backup snapshot (`archive/v<VERSION>/`).
 2. Create the release **with its release notes**: on GitHub, **Releases → Draft a new release**, new tag `v<VERSION>` on `main`, notes in the description, **Publish release**. Only version-like tags (`1.0.0`, `v1.0.0`, `1.0.0-rc1`) publish. With Claude Code, the [`cut-release`](.claude/skills/cut-release/SKILL.md) skill drafts the notes from what changed and does the rest.
-3. The notes appear on the **Versions** page (`/en/versions/`, linked from the footer), which lists every release with its date, content version, notes, site and zips.
+3. The notes appear on the **Versions** page, <https://caresets.github.io/caresets/versions/> (linked from the footer), which lists every release with its date, content version, notes, site and zips, plus the development version and the branch previews. It is rewritten on every publish.
 
 ### Optional: preview locally before committing
 

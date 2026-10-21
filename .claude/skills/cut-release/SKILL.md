@@ -12,7 +12,8 @@ to `main` only ever update `/dev/`, so **nothing reaches the published site
 without a release**.
 
 The release notes are the body of the GitHub release. That is their only home:
-`make_release_list.py` reads them for the Versions page (`/<lang>/versions/`),
+`make_versions_page.py` reads them for the Versions page (`/versions/`, at the
+root of the site, rewritten on every publish),
 so a release created **with** its notes shows them on its own build.
 
 Work through the steps in order and stop for the user's decision where marked.
@@ -104,7 +105,7 @@ Then, once GitHub's own "pages build and deployment" run has finished
   no banner.
 - https://caresets.github.io/caresets/v0.9.2/en/ — grey "Release v0.9.2"
   banner.
-- https://caresets.github.io/caresets/en/versions/ — v0.9.2 is first,
+- https://caresets.github.io/caresets/versions/ — v0.9.2 is first,
   marked current, with the notes; earlier releases below it.
 - The release on GitHub has both zips.
 
@@ -116,6 +117,5 @@ Report what you checked and what you saw.
 gh release edit v0.9.2 --notes-file notes.md
 ```
 
-The Versions page picks the change up on the next build: `/dev/` on the next
-push to `main`, the root only at the next release (the root is rebuilt only
-by a release).
+The Versions page shows the new notes after the next publish of anything (a
+push to `main` is enough), since `/versions/` is rewritten every time.
