@@ -1,0 +1,51 @@
+{%- comment -%}
+The table of releases on the Versions pages, from _data/releases.json, which
+make_release_list.py writes at build time (publish.yml runs it on every
+GitHub build). The notes are the GitHub release's own, in Markdown.
+
+A local build without that file says so instead of showing an empty table.
+A release folder is built when its release is made, so it lists the releases
+up to itself; the root, dev/ and branch previews list them all.
+{%- endcomment -%}
+{%- assign lang = page.lang | default: 'en' -%}
+{%- if lang == 'fr' -%}
+  {%- assign h_release = 'Version' -%}{%- assign h_date = 'Date' -%}{%- assign h_content = 'Contenu' -%}{%- assign h_notes = 'Notes de version' -%}{%- assign h_get = 'Consulter' -%}
+  {%- assign t_current = 'actuelle' -%}{%- assign t_pre = 'préliminaire' -%}{%- assign t_site = 'site' -%}{%- assign t_none = 'La liste des versions est générée lors de la publication sur GitHub.' -%}
+{%- elsif lang == 'nl' -%}
+  {%- assign h_release = 'Versie' -%}{%- assign h_date = 'Datum' -%}{%- assign h_content = 'Inhoud' -%}{%- assign h_notes = 'Release notes' -%}{%- assign h_get = 'Bekijken' -%}
+  {%- assign t_current = 'huidige' -%}{%- assign t_pre = 'voorlopig' -%}{%- assign t_site = 'site' -%}{%- assign t_none = 'De lijst met versies wordt opgebouwd bij publicatie op GitHub.' -%}
+{%- else -%}
+  {%- assign h_release = 'Release' -%}{%- assign h_date = 'Date' -%}{%- assign h_content = 'Content' -%}{%- assign h_notes = 'Release notes' -%}{%- assign h_get = 'Open' -%}
+  {%- assign t_current = 'current' -%}{%- assign t_pre = 'pre-release' -%}{%- assign t_site = 'site' -%}{%- assign t_none = 'The list of releases is built when the site is published on GitHub.' -%}
+{%- endif -%}
+{%- assign list = site.data.releases -%}
+{%- if list and list.releases.size > 0 %}
+<table class="releases-table">
+  <thead>
+    <tr><th>{{ h_release }}</th><th>{{ h_date }}</th><th>{{ h_content }}</th><th>{{ h_notes }}</th><th>{{ h_get }}</th></tr>
+  </thead>
+  <tbody>
+  {%- for r in list.releases %}
+    <tr>
+      <td><strong>{{ r.tag | escape }}</strong>
+        {%- if r.current %}<br><em>{{ t_current }}</em>{% endif -%}
+        {%- if r.prerelease %}<br><em>{{ t_pre }}</em>{% endif -%}
+      </td>
+      <td>{{ r.date }}</td>
+      <td>{{ r.content_version | escape }}</td>
+      <td>
+        {%- if r.title != '' and r.title != r.tag %}<strong>{{ r.title | escape }}</strong>{% endif -%}
+        {{ r.notes | markdownify }}
+      </td>
+      <td>
+        <a href="{{ list.pages_url }}/{{ r.tag }}/{{ lang }}/">{{ t_site }}</a><br>
+        <a href="{{ list.download_url }}/{{ r.tag }}/caresets-site.zip">caresets-site.zip</a><br>
+        <a href="{{ list.download_url }}/{{ r.tag }}/riziv-inami-site.zip">riziv-inami-site.zip</a>
+      </td>
+    </tr>
+  {%- endfor %}
+  </tbody>
+</table>
+{%- else %}
+<p><em>{{ t_none }}</em></p>
+{%- endif %}

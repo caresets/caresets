@@ -154,6 +154,19 @@ jobs:
             git push
           fi
 
+      # The Versions page lists every release tag, with the notes from its
+      # GitHub release. The checkout is shallow and has no tags, so fetch them
+      # (just the tagged commits). For a release this includes its own tag;
+      # its GitHub release may not exist yet, so its notes appear from the
+      # next build on - unless the release was drafted first, as the
+      # cut-release skill does.
+      - name: List the releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch -q --force --depth=1 origin '+refs/tags/*:refs/tags/*'
+          python3 make_release_list.py
+
       # ---- 2. Build the site ----
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
